@@ -28,6 +28,27 @@ class State(Enum):
     SNIFF_WALK = 11     # idle: slow walk with nose-down pauses
 
 
+# Single source of truth: the animation each state actually renders.
+# Names describe the real motion (see _draw / _draw_standing / _draw_sleeping),
+# NOT the behavior's purpose. Several states deliberately reuse "trot" because
+# the code draws the same leg cycle for all of them — only destination/speed
+# and small extras (carried ball, nose-down, head-bob) differ.
+ANIMATION = {
+    State.SLEEPING:       "breathing",    # _draw_sleeping, breath_phase swell
+    State.ALERT:          "alert-stand",  # _draw_standing, fast tail wag, no steps
+    State.WALKING:        "trot",         # _draw_standing walking leg cycle
+    State.EXCITED:        "bounce",       # vertical bounce_val + tongue + wag
+    State.FETCHING:       "trot",         # same trot, toward the ball
+    State.RETURNING_BALL: "trot-carry",   # trot + ball drawn at mouth
+    State.STRETCHING:     "stretch",      # _draw_sleeping + stretch_factor + yawn
+    State.DRINKING:       "drink",        # trot to bowl, then head-bob drink
+    State.TASK_RETURN:    "trot",         # trot home to bed
+    State.SCRATCHING:     "scratch",      # _draw_sleeping + kicking back leg
+    State.CHEWING:        "chew",         # _draw_standing + head-bob + bone
+    State.SNIFF_WALK:     "sniff",        # slow trot, nose down, sniff pauses
+}
+
+
 def get_taskbar_rect():
     """Return (left, top, right, bottom) of the taskbar in Qt logical pixels.
 
@@ -178,6 +199,17 @@ class Biscuit(QWidget):
         self.show()
         self._assert_topmost()
 
+        # === DEBUG HUD (dev tool — delete this block + debug_hud.py to remove) ===
+        from debug_hud import DebugHUD
+        self.hud_enabled = True
+        self._hud = DebugHUD(self)
+        self._hud.show()
+        # === end DEBUG HUD ===
+
+    def current_anim(self):
+        """The animation label for the current state (see ANIMATION map)."""
+        return ANIMATION.get(self.state, "?")
+
     # ── window placement ─────────────────────────────────────────────────────
 
     def _place_window(self):
@@ -257,6 +289,11 @@ class Biscuit(QWidget):
 
         if self._ticks % 180 == 0:
             self._assert_topmost()
+
+        # === DEBUG HUD (dev tool — delete this block to remove) ===
+        if getattr(self, "hud_enabled", False) and self._hud is not None:
+            self._hud.refresh(self)
+        # === end DEBUG HUD ===
 
     def _update_state(self):
         self._check_pending()
@@ -655,6 +692,13 @@ class Biscuit(QWidget):
         a_water.setChecked(self.water_enabled)
         a_water.triggered.connect(lambda chk: setattr(self, "water_enabled", chk))
 
+        # === DEBUG HUD (dev tool — delete this block to remove) ===
+        a_hud = QAction("Debug: show state HUD", self)
+        a_hud.setCheckable(True)
+        a_hud.setChecked(getattr(self, "hud_enabled", False))
+        a_hud.triggered.connect(self._toggle_hud)
+        # === end DEBUG HUD ===
+
         a_quit = QAction("Quit", self)
         a_quit.triggered.connect(QApplication.quit)
 
@@ -689,8 +733,20 @@ class Biscuit(QWidget):
         menu.addAction(a_test_chew)
         menu.addAction(a_test_sniff)
         menu.addSeparator()
+        menu.addAction(a_hud)   # === DEBUG HUD ===
         menu.addAction(a_quit)
         menu.exec_(pos)
+
+    # === DEBUG HUD (dev tool — delete this method to remove) ===
+    def _toggle_hud(self, checked):
+        self.hud_enabled = checked
+        if self._hud is not None:
+            if checked:
+                self._hud.show()
+                self._hud.refresh(self)
+            else:
+                self._hud.hide()
+    # === end DEBUG HUD ===
 
     def _handle_startup(self, checked):
         self.startup_enabled = checked
