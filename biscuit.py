@@ -1,0 +1,1004 @@
+import sys
+import math
+import random
+import ctypes
+import winreg
+import os
+from ctypes import wintypes
+from enum import Enum
+
+from PyQt5.QtWidgets import QApplication, QWidget, QMenu, QAction
+from PyQt5.QtCore import Qt, QTimer, QRect
+from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRegion,
+                         QPainterPath, QFont, QCursor)
+
+
+class State(Enum):
+    SLEEPING = 0
+    ALERT = 1
+    WALKING = 2
+    EXCITED = 3
+    FETCHING = 4        # walking to thrown ball
+    RETURNING_BALL = 5  # carrying ball back to corner
+    STRETCHING = 6      # stretch-reminder animation
+    DRINKING = 7        # water-reminder: walk to bowl + drink
+    TASK_RETURN = 8     # walking back to bed after a task
+    SCRATCHING = 9      # idle: back-leg scratch at ear
+    CHEWING = 10        # idle: gnaw a bone
+    SNIFF_WALK = 11     # idle: slow walk with nose-down pauses
+
+
+def get_taskbar_rect():
+    """Return (left, top, right, bottom) of the taskbar in Qt logical pixels.
+
+    Uses QScreen.availableGeometry() so coordinates are always in the same
+    space as setGeometry() — no DPI-mismatch with SHAppBarMessage physical px.
+    """
+    screen = QApplication.primaryScreen()
+    sg = screen.geometry()        # full screen, logical px
+    ag = screen.availableGeometry()  # area excluding taskbar, logical px
+
+    # QRect.bottom() == y + height - 1  (last included row)
+    # QRect.right()  == x + width  - 1  (last included col)
+    if ag.bottom() < sg.bottom():           # taskbar at bottom (typical)
+        tb_top    = ag.bottom() + 1         # first row of taskbar
+        tb_bottom = sg.bottom() + 1         # one past last screen row
+        tb_left   = sg.left()
+        tb_right  = sg.right() + 1
+    else:                                   # fallback — assume 48 px at bottom
+        tb_bottom = sg.bottom() + 1
+        tb_top    = tb_bottom - 48
+        tb_left   = sg.left()
+        tb_right  = sg.right() + 1
+
+    return tb_left, tb_top, tb_right, tb_bottom
+
+
+WIN_H = 95
+# Drawing uses DOG_BASE as the exclusive bottom of bounding rects, so the last
+# painted pixel row is DOG_BASE - 1 = WIN_H - 1 = 94, which maps to tb_top.
+DOG_BASE = WIN_H
+
+
+class ZzzBubble:
+    def __init__(self, x, y, size):
+        self.x = float(x)
+        self.y = float(y)
+        self.size = size
+        self.alpha = 220.0
+        self.dx = random.uniform(-0.3, 0.3)
+
+    def tick(self):
+        self.y -= 0.5
+        self.x += self.dx
+        self.alpha -= 2.2
+        return self.alpha > 0
+
+
+class Biscuit(QWidget):
+    def __init__(self):
+        super().__init__()
+
+        screen = QApplication.primaryScreen().geometry()
+        self.sw = screen.width()
+        self.sh = screen.height()
+
+        self.tb_left, self.tb_top, self.tb_right, self.tb_bottom = get_taskbar_rect()
+
+        # Full-width static window; dog and decorations drawn at their screen-x coords
+        # (window-local x == screen x because window always starts at x=0).
+        self.win_w = self.sw
+
+        # Corner home positions (screen x = window-local x)
+        self.bed_cx  = self.tb_right - 160
+        self.bowl_cx = self.tb_right - 95
+        self.ball_cx = self.tb_right - 65
+
+        # Dog starts on the bed
+        self.dog_sx = float(self.bed_cx)
+
+        self.state = State.SLEEPING
+        self.paused = False
+        self.facing = -1   # -1=left  1=right
+
+        self._ticks = 0
+        self.breath_phase = 0.0
+        self.tail_phase = 0.0
+        self.walk_phase = 0.0
+        self.bounce_val = 0.0
+
+        self.tongue = False
+        self.state_frames = 0
+        self.walk_dir = -1
+        self.returning = False  # True while dog is walking back to the bed
+
+        self.cursor_near = False
+        self.cursor_settle = 0
+
+        self.bubbles = []
+        self.zzz_cd = 200
+
+        self.walk_min = float(self.tb_left + 100)
+        self.walk_max = float(self.bed_cx)  # dog returns to bed when going right
+
+        self.startup_enabled = self._check_startup()
+
+        # Ball state
+        self.ball_x = float(self.ball_cx)
+        self.ball_visible = True
+
+        # Bowl state
+        self.bowl_full = True
+
+        # Task system
+        self.task_phase = 0
+        self.task_frames = 0
+        self.stretch_factor = 0.0
+
+        # Sniff-walk sub-state
+        self.sniff_dest = 0.0
+        self.sniff_next_pause = 0.0
+
+        # Reminder settings & pending flags
+        self.stretch_enabled = True
+        self.water_enabled = True
+        self.stretch_pending = False
+        self.water_pending = False
+
+        self.setWindowFlags(
+            Qt.FramelessWindowHint
+            | Qt.WindowStaysOnTopHint
+            | Qt.Tool
+            | Qt.NoDropShadowWindowHint
+        )
+        self.setAttribute(Qt.WA_TranslucentBackground)
+        self.setAttribute(Qt.WA_ShowWithoutActivating)
+
+        self._place_window()
+
+        t = QTimer(self)
+        t.timeout.connect(self._on_tick)
+        t.start(33)
+
+        # Single-shot timer: fires once after a random sleep duration, starts a walk.
+        # Re-armed each time the dog returns to the bed.
+        self._sleep_timer = QTimer(self)
+        self._sleep_timer.setSingleShot(True)
+        self._sleep_timer.timeout.connect(self._start_walk)
+        self._arm_sleep_timer()
+
+        self._stretch_timer = QTimer(self)
+        self._stretch_timer.timeout.connect(self._on_stretch_timer)
+        self._stretch_timer.start(30 * 60 * 1000)   # every 30 minutes
+
+        self._water_timer = QTimer(self)
+        self._water_timer.timeout.connect(self._on_water_timer)
+        self._water_timer.start(60 * 60 * 1000)     # every 60 minutes
+
+        self.show()
+        self._assert_topmost()
+
+    # ── window placement ─────────────────────────────────────────────────────
+
+    def _place_window(self):
+        # wy + WIN_H - 1 == tb_top  →  last window pixel row lands on tb_top.
+        wy = self.tb_top - WIN_H + 1
+        self.setGeometry(0, wy, self.win_w, WIN_H)
+        self._update_mask()
+
+    def _update_mask(self):
+        dx = int(self.dog_sx)
+        if self.state in (State.SLEEPING, State.STRETCHING, State.SCRATCHING):
+            dog_r = QRect(dx - 60, WIN_H - 38, 120, 38)
+        else:
+            dog_r = QRect(dx - 52, WIN_H - 75, 104, 75)
+
+        decor_left  = self.bed_cx - 42
+        decor_right = self.ball_cx + 12
+        decor_r = QRect(decor_left, WIN_H - 25, decor_right - decor_left, 25)
+
+        region = QRegion(dog_r) | QRegion(decor_r)
+
+        # Ball away from its home corner also needs to be in mask to be visible
+        if self.ball_visible and abs(self.ball_x - self.ball_cx) > 20:
+            bx = int(self.ball_x)
+            region |= QRegion(QRect(bx - 12, WIN_H - 20, 24, 20))
+
+        self.setMask(region)
+
+    def _assert_topmost(self):
+        hwnd = int(self.winId())
+        ctypes.WinDLL("user32").SetWindowPos(
+            hwnd, -1, 0, 0, 0, 0, 0x0001 | 0x0002 | 0x0010)
+
+    # ── tick ─────────────────────────────────────────────────────────────────
+
+    def _on_tick(self):
+        self._ticks += 1
+        self.breath_phase += 0.05
+        self.tail_phase += 0.15
+        self.walk_phase += 0.25
+
+        # Cursor proximity
+        cp = QCursor.pos()
+        dog_screen_cy = self.tb_top - 25
+        dist = math.hypot(cp.x() - self.dog_sx, cp.y() - dog_screen_cy)
+        was_near = self.cursor_near
+        self.cursor_near = dist < 150
+
+        if self.cursor_near:
+            self.facing = -1 if cp.x() < self.dog_sx else 1
+            if not was_near and self.state == State.SLEEPING:
+                self.state = State.ALERT
+                self.bubbles.clear()
+            self.cursor_settle = 90
+
+        if not self.cursor_near and self.cursor_settle > 0:
+            self.cursor_settle -= 1
+            if self.cursor_settle == 0 and self.state == State.ALERT:
+                self.state = State.SLEEPING
+
+        if not self.paused:
+            self._update_state()
+
+        # Zzz
+        if self.state == State.SLEEPING and not self.paused:
+            self.zzz_cd -= 1
+            if self.zzz_cd <= 0:
+                self.zzz_cd = random.randint(130, 230)
+                hx = int(self.dog_sx) + self.facing * 25
+                hy = DOG_BASE - 38
+                self.bubbles.append(ZzzBubble(hx, hy, random.randint(7, 11)))
+
+        self.bubbles = [b for b in self.bubbles if b.tick()]
+
+        self._update_mask()
+        self.update()
+
+        if self._ticks % 180 == 0:
+            self._assert_topmost()
+
+    def _update_state(self):
+        self._check_pending()
+
+        if self.state == State.WALKING:
+            if self.returning:
+                # Walking home — always move toward bed_cx
+                self.dog_sx += 1.5 * self.walk_dir
+                if self.dog_sx >= self.bed_cx:
+                    self.dog_sx = float(self.bed_cx)
+                    self.returning = False
+                    self.state = State.SLEEPING
+                    self.facing = -1  # settle facing left on the bed
+                    self._arm_sleep_timer()
+            else:
+                # Roaming — bounce between walk_min and walk_max
+                self.dog_sx += 1.5 * self.walk_dir
+                if self.dog_sx >= self.walk_max:
+                    self.walk_dir = -1
+                    self.facing = -1
+                elif self.dog_sx <= self.walk_min:
+                    self.walk_dir = 1
+                    self.facing = 1
+
+                self.state_frames -= 1
+                if self.state_frames <= 0:
+                    # Time's up — head home; dog is always left-of or at bed_cx
+                    self.returning = True
+                    self.walk_dir = 1
+                    self.facing = 1
+
+        elif self.state == State.EXCITED:
+            self.bounce_val = abs(math.sin(self._ticks * 0.25)) * 8
+            self.state_frames -= 1
+            if self.state_frames <= 0:
+                self.state = State.SLEEPING
+                self.tongue = False
+                self.bounce_val = 0.0
+                self._arm_sleep_timer()
+
+        elif self.state == State.FETCHING:
+            self._update_fetching()
+        elif self.state == State.RETURNING_BALL:
+            self._update_returning_ball()
+        elif self.state == State.STRETCHING:
+            self._update_stretching()
+        elif self.state == State.DRINKING:
+            self._update_drinking()
+        elif self.state == State.TASK_RETURN:
+            self._update_task_return()
+        elif self.state == State.SCRATCHING:
+            self._update_scratching()
+        elif self.state == State.CHEWING:
+            self._update_chewing()
+        elif self.state == State.SNIFF_WALK:
+            self._update_sniff_walk()
+
+    def _arm_sleep_timer(self):
+        """Schedule the next walk after 4–8 minutes of sleep."""
+        ms = random.randint(4 * 60 * 1000, 8 * 60 * 1000)
+        self._sleep_timer.start(ms)
+
+    def _start_walk(self):
+        """Called when the sleep timer fires. Start a roaming walk."""
+        if self.paused or self.cursor_near or self.state != State.SLEEPING:
+            # Not ready — retry in 30 s without resetting the full sleep cycle
+            self._sleep_timer.start(30_000)
+            return
+
+        # If ball was thrown and never fetched, go get it first
+        if self.ball_visible and abs(self.ball_x - self.ball_cx) > 20:
+            self.state = State.FETCHING
+            self.task_phase = 0
+            self.task_frames = 0
+            self.returning = False
+            self.bubbles.clear()
+            return
+
+        # Equal chance of: normal walk, scratch, chew, sniff-walk
+        behavior = random.choice(('walk', 'scratch', 'chew', 'sniff'))
+        self.bubbles.clear()
+        self.task_phase = 0
+        self.task_frames = 0
+
+        if behavior == 'scratch':
+            self.state = State.SCRATCHING
+            self.state_frames = random.randint(90, 120)   # 3–4 s
+        elif behavior == 'chew':
+            self.state = State.CHEWING
+            self.state_frames = random.randint(240, 300)  # 8–10 s
+        elif behavior == 'sniff':
+            self.state = State.SNIFF_WALK
+            sniff_dist = random.randint(100, 400)
+            self.sniff_dest = max(self.walk_min, self.dog_sx - sniff_dist)
+            self.sniff_next_pause = self.dog_sx - random.randint(20, 30)
+            self.facing = -1
+        else:  # normal walk
+            self.state = State.WALKING
+            self.returning = False
+            self.walk_dir = -1
+            self.facing = -1
+            self.state_frames = random.randint(30 * 30, 90 * 30)
+
+    # ── painting ──────────────────────────────────────────────────────────────
+
+    def paintEvent(self, event):
+        p = QPainter(self)
+        p.setCompositionMode(QPainter.CompositionMode_Clear)
+        p.fillRect(self.rect(), Qt.transparent)
+        p.setCompositionMode(QPainter.CompositionMode_SourceOver)
+        p.setRenderHint(QPainter.Antialiasing)
+        self._draw(p)
+        p.end()
+
+    def _draw(self, p):
+        cx = int(self.dog_sx)
+        base = DOG_BASE - int(self.bounce_val)
+        f = self.facing
+
+        BROWN = QColor(185, 118, 55)
+        DARK  = QColor(118, 70, 22)
+        BLACK = QColor(32, 22, 12)
+        WHITE = QColor(255, 255, 255)
+        PINK  = QColor(230, 88, 88)
+        ZZZ   = QColor(130, 148, 228)
+
+        excited  = self.state == State.EXCITED
+        alert    = self.state == State.ALERT
+
+        # Corner home objects drawn first
+        self._draw_corner(p)
+
+        # Dog visual
+        if self.state in (State.SLEEPING, State.STRETCHING):
+            self._draw_sleeping(p, cx, base, f, BROWN, DARK, BLACK)
+
+        elif self.state == State.SCRATCHING:
+            shake_x = int(math.sin(self.task_frames * 0.65) * 1.5)
+            shake_y = int(math.cos(self.task_frames * 0.73) * 1.0)
+            self._draw_sleeping(p, cx + shake_x, base + shake_y, f, BROWN, DARK, BLACK)
+            self._draw_scratch_leg(p, cx + shake_x, base + shake_y, f, DARK)
+
+        elif self.state == State.CHEWING:
+            head_bob = int(max(0, math.sin(self.task_frames * 0.30)) * 5)
+            self._draw_standing(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
+                                False, False, False, head_bob=head_bob)
+            self._draw_bone(p, cx, base, f, head_bob)
+
+        elif self.state == State.SNIFF_WALK:
+            is_sniff_walking = (self.task_phase == 0)
+            head_bob = 8 if is_sniff_walking else 10  # nose down while walking/pausing
+            self._draw_standing(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
+                                is_sniff_walking, False, False, head_bob=head_bob)
+
+        else:
+            is_walking_anim = self.state in (
+                State.WALKING, State.FETCHING, State.RETURNING_BALL, State.TASK_RETURN
+            ) or (self.state == State.DRINKING and self.task_phase == 0)
+            head_bob = 0
+            if self.state == State.DRINKING and self.task_phase == 1 and self.bowl_full:
+                head_bob = int(max(0, math.sin(self.task_frames * 0.25)) * 10)
+            self._draw_standing(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
+                                is_walking_anim, excited, alert, head_bob=head_bob)
+
+        # Ball carried by dog (RETURNING_BALL state)
+        if self.state == State.RETURNING_BALL:
+            r = 6
+            bx = int(self.dog_sx) + self.facing * 28
+            by = base - 45
+            p.setPen(Qt.NoPen)
+            p.setBrush(QColor(215, 70, 45))
+            p.drawEllipse(bx - r, by, r * 2, r * 2)
+
+        for b in self.bubbles:
+            alpha = max(0, min(255, int(b.alpha)))
+            p.save()
+            p.setOpacity(alpha / 255.0)
+            p.setFont(QFont("Arial", b.size, QFont.Bold))
+            p.setPen(QPen(ZZZ))
+            p.drawText(int(b.x), int(b.y), "z")
+            p.restore()
+
+    def _draw_corner(self, p):
+        BED_FILL   = QColor(250, 250, 250)   # white so dog is visible on it
+        BED_RIM    = QColor(185, 185, 185)
+        BOWL_FULL  = QColor(148, 198, 222)
+        BOWL_EMPTY = QColor(175, 168, 158)
+        BOWL_RIM   = QColor(192, 192, 192)
+        BALL_COL   = QColor(215, 70, 45)
+        SHINE      = QColor(255, 200, 185, 155)
+
+        ground = WIN_H
+
+        # Bed
+        bw, bh = 72, 18
+        p.setPen(QPen(BED_RIM, 1.5))
+        p.setBrush(BED_FILL)
+        p.drawEllipse(self.bed_cx - bw // 2, ground - bh, bw, bh)
+        p.setPen(QPen(BED_RIM, 1, Qt.DotLine))
+        p.setBrush(Qt.NoBrush)
+        p.drawLine(self.bed_cx - bw // 2 + 7, ground - bh // 2,
+                   self.bed_cx + bw // 2 - 7, ground - bh // 2)
+
+        # Water bowl — full=blue, empty=grey
+        bw2, bh2 = 22, 12
+        p.setPen(QPen(BOWL_RIM, 1.5))
+        p.setBrush(BOWL_FULL if self.bowl_full else BOWL_EMPTY)
+        p.drawEllipse(self.bowl_cx - bw2 // 2, ground - bh2, bw2, bh2)
+
+        # Ball — drawn at ball_x (may be corner or somewhere on taskbar)
+        if self.ball_visible:
+            bx = int(self.ball_x)
+            r = 8
+            p.setPen(Qt.NoPen)
+            p.setBrush(BALL_COL)
+            p.drawEllipse(bx - r, ground - r * 2, r * 2, r * 2)
+            p.setBrush(SHINE)
+            p.drawEllipse(bx - r + 2, ground - r * 2 + 2, r // 2 + 2, r // 2 + 1)
+
+    def _draw_sleeping(self, p, cx, base, f, BROWN, DARK, BLACK):
+        stretch_extra = int(self.stretch_factor * 25)
+        bw = 68 + stretch_extra
+        bh = int(18 + math.sin(self.breath_phase) * 1.5)
+        body_top = base - bh
+
+        # Tail (at the back = opposite of facing)
+        tx = cx - f * (bw // 2 - 4)
+        p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        tp = QPainterPath()
+        tp.moveTo(tx, body_top + bh // 2)
+        tp.quadTo(tx - f * (-10), body_top - 6,
+                  tx - f * (-4),  body_top - 17)
+        p.drawPath(tp)
+
+        # Body
+        p.setPen(Qt.NoPen)
+        p.setBrush(BROWN)
+        p.drawEllipse(cx - bw // 2, body_top, bw, bh)
+
+        # Head (at front = facing side)
+        hr = 13
+        hcx = cx + f * (bw // 2 - 5)
+        hcy = body_top + bh // 2 - 4
+        p.setBrush(BROWN)
+        p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
+
+        # Ear
+        p.setBrush(DARK)
+        p.drawEllipse(int(hcx - f * 3 - 5), int(hcy - hr + 3), 9, 14)
+
+        # Eye closed
+        p.setPen(QPen(BLACK, 1.5, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(int(hcx + f * 3 - 4), int(hcy - 4), 8, 6, 0, -180 * 16)
+
+        # Nose / yawn (yawn opens during stretch)
+        p.setPen(Qt.NoPen)
+        if self.stretch_factor > 0.4:
+            yawn_h = max(2, int(self.stretch_factor * 8))
+            p.setBrush(QColor(55, 28, 18))
+            p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 2), 7, yawn_h)
+        else:
+            p.setBrush(BLACK)
+            p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 2), 7, 5)
+
+        # Legs tucked
+        p.setBrush(DARK)
+        for lo in [-20, -7, 7, 20]:
+            p.drawRoundedRect(cx + lo - 3, base - 9, 6, 9, 3, 3)
+
+    def _draw_standing(self, p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
+                       walking, excited, alert, head_bob=0):
+        bw = 52
+        bh = 17
+        leg_len = 17
+        body_bottom = base - leg_len
+        body_top = body_bottom - bh
+
+        # Legs
+        p.setPen(Qt.NoPen)
+        p.setBrush(DARK)
+        leg_xs = [-18, -6, 8, 20]
+        if walking:
+            sw = math.sin(self.walk_phase) * 5
+            swings = [-sw, sw, sw, -sw]
+        else:
+            swings = [0.0] * 4
+        for i, lx in enumerate(leg_xs):
+            extra = abs(swings[i])
+            p.drawRoundedRect(int(cx + lx - 2), body_bottom - 1,
+                              5, int(leg_len + extra), 2, 2)
+
+        # Body
+        p.setBrush(BROWN)
+        p.drawEllipse(cx - bw // 2, body_top, bw, bh)
+
+        # Tail
+        wag = math.sin(self.tail_phase) * 12 if (alert or excited or walking) else 5
+        tx = cx - f * (bw // 2 - 3)
+        ty = body_top + bh // 2
+        p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        tp = QPainterPath()
+        tp.moveTo(tx, ty)
+        tp.quadTo(tx - f * 8, ty - 12, tx - f * 5, ty - 20 - wag)
+        p.drawPath(tp)
+
+        # Head
+        hr = 13
+        hcx = cx + f * (bw // 2 - 2)
+        hcy = body_top - 4 + head_bob
+        p.setPen(Qt.NoPen)
+        p.setBrush(BROWN)
+        p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
+
+        # Ear
+        p.setBrush(DARK)
+        p.drawEllipse(int(hcx - f * 2 - 5), int(hcy - hr - 2), 9, 14)
+
+        # Eye
+        p.setBrush(BLACK)
+        p.drawEllipse(int(hcx + f * 4 - 3), int(hcy - 7), 6, 6)
+        p.setBrush(WHITE)
+        p.drawEllipse(int(hcx + f * 4 - 1), int(hcy - 6), 2, 2)
+
+        # Nose
+        p.setPen(Qt.NoPen)
+        p.setBrush(BLACK)
+        p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 1), 7, 5)
+
+        # Tongue
+        if self.tongue or excited:
+            p.setBrush(PINK)
+            p.drawEllipse(int(hcx + f * 8 - 3), int(hcy + 7), 7, 8)
+
+    # ── events ────────────────────────────────────────────────────────────────
+
+    def mousePressEvent(self, event):
+        lx = event.pos().x()
+        ly = event.pos().y()
+
+        if event.button() == Qt.LeftButton:
+            # Ball click — only when ball is at home corner and no fetch in progress
+            if (self.ball_visible
+                    and abs(self.ball_x - self.ball_cx) < 5
+                    and abs(lx - self.ball_cx) < 12
+                    and ly > WIN_H - 20
+                    and self.state not in (State.FETCHING, State.RETURNING_BALL)):
+                self._throw_ball()
+                return
+
+            # Bowl click — refill
+            if abs(lx - self.bowl_cx) < 13 and ly > WIN_H - 14:
+                self._refill_bowl()
+                return
+
+            # Dog click
+            if not self.paused:
+                old_state = self.state
+                self.state = State.EXCITED
+                self.tongue = True
+                self.state_frames = 75
+                self.bounce_val = 0.0
+                self.bubbles.clear()
+                self.returning = False
+                self.task_phase = 0
+                self.task_frames = 0
+                self.stretch_factor = 0.0
+                if old_state == State.RETURNING_BALL:
+                    self.ball_x = float(self.ball_cx)
+                    self.ball_visible = True
+
+        elif event.button() == Qt.RightButton:
+            self._show_menu(event.globalPos())
+
+    def _show_menu(self, pos):
+        menu = QMenu(self)
+
+        a_pause = QAction("Pause animations", self)
+        a_pause.setCheckable(True)
+        a_pause.setChecked(self.paused)
+        a_pause.triggered.connect(lambda chk: setattr(self, "paused", chk))
+
+        a_start = QAction("Launch at startup", self)
+        a_start.setCheckable(True)
+        a_start.setChecked(self.startup_enabled)
+        a_start.triggered.connect(self._handle_startup)
+
+        a_stretch = QAction("Stretch reminders", self)
+        a_stretch.setCheckable(True)
+        a_stretch.setChecked(self.stretch_enabled)
+        a_stretch.triggered.connect(lambda chk: setattr(self, "stretch_enabled", chk))
+
+        a_water = QAction("Water reminders", self)
+        a_water.setCheckable(True)
+        a_water.setChecked(self.water_enabled)
+        a_water.triggered.connect(lambda chk: setattr(self, "water_enabled", chk))
+
+        a_quit = QAction("Quit", self)
+        a_quit.triggered.connect(QApplication.quit)
+
+        a_test_stretch = QAction("Test: stretch", self)
+        a_test_stretch.triggered.connect(self._test_stretch)
+
+        a_test_water = QAction("Test: water reminder", self)
+        a_test_water.triggered.connect(self._test_water)
+
+        a_test_fetch = QAction("Test: fetch", self)
+        a_test_fetch.triggered.connect(self._test_fetch)
+
+        a_test_scratch = QAction("Test: scratch", self)
+        a_test_scratch.triggered.connect(self._test_scratch)
+
+        a_test_chew = QAction("Test: chew bone", self)
+        a_test_chew.triggered.connect(self._test_chew)
+
+        a_test_sniff = QAction("Test: sniff walk", self)
+        a_test_sniff.triggered.connect(self._test_sniff)
+
+        menu.addAction(a_pause)
+        menu.addAction(a_start)
+        menu.addAction(a_stretch)
+        menu.addAction(a_water)
+        menu.addSeparator()
+        menu.addSection("Test")
+        menu.addAction(a_test_stretch)
+        menu.addAction(a_test_water)
+        menu.addAction(a_test_fetch)
+        menu.addAction(a_test_scratch)
+        menu.addAction(a_test_chew)
+        menu.addAction(a_test_sniff)
+        menu.addSeparator()
+        menu.addAction(a_quit)
+        menu.exec_(pos)
+
+    def _handle_startup(self, checked):
+        self.startup_enabled = checked
+        self._write_startup(checked)
+
+    # ── helper ───────────────────────────────────────────────────────────────
+
+    def _walk_toward(self, dest):
+        """Move dog one step toward dest. Returns True when arrived."""
+        diff = dest - self.dog_sx
+        if abs(diff) < 2.0:
+            self.dog_sx = float(dest)
+            return True
+        self.facing = 1 if diff > 0 else -1
+        self.dog_sx += 1.5 * self.facing
+        return abs(self.dog_sx - dest) < 2.0
+
+    def _check_pending(self):
+        """Consume pending reminder flags when not already running a task."""
+        if self.state in (State.FETCHING, State.RETURNING_BALL,
+                          State.STRETCHING, State.DRINKING, State.TASK_RETURN):
+            return
+        if self.stretch_pending:
+            self.stretch_pending = False
+            if self.stretch_enabled:
+                self.bubbles.clear()
+                self._sleep_timer.stop()
+                self.returning = False
+                self.state = State.STRETCHING
+                self.task_phase = 0
+                self.task_frames = 0
+                self.stretch_factor = 0.0
+            return
+        if self.water_pending:
+            self.water_pending = False
+            if self.water_enabled:
+                self.bubbles.clear()
+                self._sleep_timer.stop()
+                self.returning = False
+                self.state = State.DRINKING
+                self.task_phase = 0
+                self.task_frames = 0
+            return
+
+    # ── task state updates ────────────────────────────────────────────────────
+
+    def _update_fetching(self):
+        if self.task_phase == 0:
+            if self._walk_toward(self.ball_x):
+                self.ball_visible = False
+                self.task_phase = 1
+                self.task_frames = 15
+        elif self.task_phase == 1:
+            self.task_frames -= 1
+            if self.task_frames <= 0:
+                self.state = State.RETURNING_BALL
+                self.task_phase = 0
+
+    def _update_returning_ball(self):
+        if self._walk_toward(self.bed_cx):
+            self.ball_x = float(self.ball_cx)
+            self.ball_visible = True
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    def _update_stretching(self):
+        self.task_frames += 1
+        self.stretch_factor = math.sin(math.pi * min(self.task_frames, 90) / 90)
+        if self.task_frames >= 90:
+            self.stretch_factor = 0.0
+            self.task_frames = 0
+            if abs(self.dog_sx - self.bed_cx) < 3:
+                self.dog_sx = float(self.bed_cx)
+                self.state = State.SLEEPING
+                self.facing = -1
+                self._arm_sleep_timer()
+            else:
+                self.state = State.TASK_RETURN
+
+    def _update_drinking(self):
+        if self.task_phase == 0:
+            drink_pos = float(self.bowl_cx - 20)
+            if self._walk_toward(drink_pos):
+                self.dog_sx = drink_pos
+                self.facing = 1
+                self.task_phase = 1
+                self.task_frames = 0
+        elif self.task_phase == 1:
+            self.task_frames += 1
+            duration = 80 if self.bowl_full else 30
+            if self.task_frames >= duration:
+                if self.bowl_full:
+                    self.bowl_full = False
+                self.task_frames = 0
+                self.task_phase = 0
+                self.state = State.TASK_RETURN
+
+    def _update_task_return(self):
+        if self._walk_toward(self.bed_cx):
+            self.dog_sx = float(self.bed_cx)
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    # ── idle behaviour updates ────────────────────────────────────────────────
+
+    def _update_scratching(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    def _update_chewing(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    def _update_sniff_walk(self):
+        if self.task_phase == 0:                        # walking slowly
+            diff = self.sniff_dest - self.dog_sx
+            if abs(diff) < 2:
+                self.dog_sx = float(self.sniff_dest)
+                self.task_phase = 0
+                self.task_frames = 0
+                self.state = State.TASK_RETURN
+                return
+            self.facing = 1 if diff > 0 else -1
+            self.dog_sx += 0.75 * self.facing           # half normal speed
+            # Trigger a sniff-pause when crossing the next pause point
+            if self.facing == -1 and self.dog_sx <= self.sniff_next_pause:
+                self.task_phase = 1
+                self.task_frames = random.randint(12, 18)   # ~0.5 s
+            elif self.facing == 1 and self.dog_sx >= self.sniff_next_pause:
+                self.task_phase = 1
+                self.task_frames = random.randint(12, 18)
+        else:                                           # paused, sniffing
+            self.task_frames -= 1
+            if self.task_frames <= 0:
+                self.task_phase = 0
+                # Schedule next pause point further along
+                self.sniff_next_pause = (self.dog_sx
+                                         + self.facing * random.randint(20, 30))
+
+    # ── idle behaviour drawing ────────────────────────────────────────────────
+
+    def _draw_scratch_leg(self, p, cx, base, f, DARK):
+        """Kicking back leg for the scratch animation."""
+        kick = math.sin(self.task_frames * 0.85)       # rapid oscillation
+        # Back hip is on the opposite side from the head
+        hip_x = int(cx - f * 14)
+        hip_y = base - 8
+        # Leg swings in the facing direction (toward the ear/neck)
+        extent = max(0.0, kick) * 22
+        tip_x = int(hip_x + f * extent)
+        tip_y = int(hip_y - (5 + max(0.0, kick) * 14))
+        p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap))
+        p.drawLine(hip_x, hip_y, tip_x, tip_y)
+
+    def _draw_bone(self, p, cx, base, f, head_bob):
+        """Bone held in dog's mouth during CHEWING."""
+        BONE = QColor(238, 220, 182)
+        bw = 52; bh = 17; leg_len = 17
+        body_bottom = base - leg_len
+        body_top    = body_bottom - bh
+        hcx = cx + f * (bw // 2 - 2)
+        hcy = body_top - 4 + head_bob
+        # Centre the bone in front of the mouth
+        bcx = int(hcx + f * 20)
+        bcy = int(hcy + 4)
+        shaft_w = 12; shaft_h = 4; knob_w = 6; knob_h = 8
+        p.setPen(Qt.NoPen)
+        p.setBrush(BONE)
+        p.drawRoundedRect(bcx - shaft_w // 2, bcy - shaft_h // 2,
+                          shaft_w, shaft_h, 2, 2)
+        p.drawEllipse(bcx - shaft_w // 2 - knob_w // 2, bcy - knob_h // 2,
+                      knob_w, knob_h)
+        p.drawEllipse(bcx + shaft_w // 2 - knob_w // 2, bcy - knob_h // 2,
+                      knob_w, knob_h)
+
+    # ── fetch / bowl ──────────────────────────────────────────────────────────
+
+    def _throw_ball(self):
+        min_x = int(self.walk_min)
+        max_x = int(self.bed_cx) - 70
+        if max_x <= min_x:
+            return
+        self.ball_x = float(random.randint(min_x, max_x))
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.state = State.FETCHING
+        self.task_phase = 0
+        self.task_frames = 0
+        self.returning = False
+
+    def _refill_bowl(self):
+        self.bowl_full = True
+
+    # ── reminder timers ───────────────────────────────────────────────────────
+
+    def _on_stretch_timer(self):
+        self.stretch_pending = True
+
+    def _on_water_timer(self):
+        self.water_pending = True
+
+    # ── dev test triggers ─────────────────────────────────────────────────────
+
+    def _test_stretch(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.stretch_factor = 0.0
+        self.state = State.STRETCHING
+
+    def _test_water(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state = State.DRINKING
+
+    def _test_fetch(self):
+        min_x = int(self.walk_min)
+        max_x = int(self.bed_cx) - 70
+        if max_x <= min_x:
+            return
+        self.ball_x = float(random.randint(min_x, max_x))
+        self.ball_visible = True
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.state = State.FETCHING
+        self.task_phase = 0
+        self.task_frames = 0
+        self.returning = False
+
+    def _test_scratch(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = random.randint(90, 120)
+        self.state = State.SCRATCHING
+
+    def _test_chew(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = random.randint(240, 300)
+        self.state = State.CHEWING
+
+    def _test_sniff(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        sniff_dist = random.randint(100, 400)
+        self.sniff_dest = max(self.walk_min, self.dog_sx - sniff_dist)
+        self.sniff_next_pause = self.dog_sx - random.randint(20, 30)
+        self.facing = -1
+        self.state = State.SNIFF_WALK
+
+    # ── startup registry ──────────────────────────────────────────────────────
+
+    def _exe_path(self):
+        if getattr(sys, "frozen", False):
+            return f'"{sys.executable}"'
+        return f'"{sys.executable}" "{os.path.abspath(sys.argv[0])}"'
+
+    def _check_startup(self):
+        key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key)
+            winreg.QueryValueEx(k, "Biscuit")
+            winreg.CloseKey(k)
+            return True
+        except Exception:
+            return False
+
+    def _write_startup(self, enable):
+        key = r"SOFTWARE\Microsoft\Windows\CurrentVersion\Run"
+        try:
+            k = winreg.OpenKey(winreg.HKEY_CURRENT_USER, key, 0, winreg.KEY_SET_VALUE)
+            if enable:
+                winreg.SetValueEx(k, "Biscuit", 0, winreg.REG_SZ, self._exe_path())
+            else:
+                try:
+                    winreg.DeleteValue(k, "Biscuit")
+                except FileNotFoundError:
+                    pass
+            winreg.CloseKey(k)
+        except Exception as e:
+            print(f"Registry error: {e}")
+
+
+if __name__ == "__main__":
+    app = QApplication(sys.argv)
+    window = Biscuit()
+    sys.exit(app.exec_())
