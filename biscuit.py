@@ -33,22 +33,54 @@ class State(Enum):
 
 # Single source of truth: the animation each state actually renders.
 # Names describe the real motion (see _draw / _draw_standing / _draw_sleeping),
-# NOT the behavior's purpose. Several states deliberately reuse "trot" because
-# the code draws the same leg cycle for all of them — only destination/speed
-# and small extras (carried ball, nose-down, head-bob) differ.
+# NOT the behavior's purpose. Locomotion states are routed through GAITS below,
+# so the label names the gait.
 ANIMATION = {
     State.SLEEPING:       "breathing",    # _draw_sleeping, breath_phase swell
-    State.ALERT:          "alert-stand",  # _draw_standing, fast tail wag, no steps
-    State.WALKING:        "trot",         # _draw_standing walking leg cycle
+    State.ALERT:          "alert-stand",  # _draw_standing, ears up, gentle sway
+    State.WALKING:        "trot-brisk",   # even, perky roam
     State.EXCITED:        "bounce",       # vertical bounce_val + tongue + wag
-    State.FETCHING:       "trot",         # same trot, toward the ball
-    State.RETURNING_BALL: "trot-carry",   # trot + ball drawn at mouth
+    State.FETCHING:       "scamper",      # fast, bouncy, short strides
+    State.RETURNING_BALL: "plod-carry",   # heavy heading-home walk + ball at mouth
     State.STRETCHING:     "stretch",      # _draw_sleeping + stretch_factor + yawn
-    State.DRINKING:       "drink",        # trot to bowl, then head-bob drink
-    State.TASK_RETURN:    "trot",         # trot home to bed
+    State.DRINKING:       "drink",        # brisk trot to bowl, then head-bob drink
+    State.TASK_RETURN:    "plod",         # heavy heading-home walk
     State.SCRATCHING:     "scratch",      # _draw_sleeping + kicking back leg
     State.CHEWING:        "chew",         # _draw_standing + head-bob + bone
-    State.SNIFF_WALK:     "sniff",        # slow trot, nose down, sniff pauses
+    State.SNIFF_WALK:     "sniff-walk",   # slow nose-down walk, pause-and-go
+}
+
+
+class Gait:
+    """Locomotion parameters: how the legs/body move while a state travels."""
+    __slots__ = ("name", "speed", "phase_rate", "swing", "bounce",
+                 "head_down", "wag")
+
+    def __init__(self, name, speed, phase_rate, swing, bounce, head_down, wag):
+        self.name = name
+        self.speed = speed              # px per tick
+        self.phase_rate = phase_rate    # walk_phase increment per tick
+        self.swing = swing              # leg swing amplitude (px)
+        self.bounce = bounce            # whole-body vertical bounce (px)
+        self.head_down = head_down      # head lowered by this many px
+        self.wag = wag                  # tail wag amplitude while moving
+
+
+GAITS = {
+    "trot-brisk": Gait("trot-brisk", 1.5, 0.25, 5, 0.0, 0, 12),
+    "plod":       Gait("plod",       0.9, 0.15, 3, 0.0, 3, 6),
+    "scamper":    Gait("scamper",    2.6, 0.42, 7, 2.5, 0, 14),
+    "sniff-walk": Gait("sniff-walk", 0.75, 0.12, 3, 0.0, 0, 4),
+}
+
+# Which gait each state travels with (None / missing = state doesn't travel).
+STATE_GAIT = {
+    State.WALKING:        "trot-brisk",
+    State.TASK_RETURN:    "plod",
+    State.RETURNING_BALL: "plod",
+    State.FETCHING:       "scamper",
+    State.SNIFF_WALK:     "sniff-walk",
+    State.DRINKING:       "trot-brisk",   # approach phase only
 }
 
 
@@ -222,6 +254,18 @@ class Biscuit(QWidget):
         """The animation label for the current state (see ANIMATION map)."""
         return ANIMATION.get(self.state, "?")
 
+    def _active_gait(self):
+        """The Gait the dog is travelling with right now, else None.
+
+        Phase-aware: states that pause mid-behavior (drink, pickup, sniff
+        pause) only report a gait while their travelling sub-phase is active.
+        """
+        if self.state in (State.DRINKING, State.FETCHING, State.SNIFF_WALK) \
+                and self.task_phase != 0:
+            return None
+        name = STATE_GAIT.get(self.state)
+        return GAITS[name] if name is not None else None
+
     # ── window placement ─────────────────────────────────────────────────────
 
     def _place_window(self):
@@ -261,7 +305,8 @@ class Biscuit(QWidget):
         self._ticks += 1
         self.breath_phase += 0.05
         self.tail_phase += 0.15
-        self.walk_phase += 0.25
+        g = self._active_gait()
+        self.walk_phase += g.phase_rate if g is not None else 0.25
 
         # Cursor proximity (behavior switch: interactive.cursor_alert)
         if self.settings.get("interactive.cursor_alert"):
@@ -341,7 +386,7 @@ class Biscuit(QWidget):
         if self.state == State.WALKING:
             if self.returning:
                 # Walking home — always move toward bed_cx
-                self.dog_sx += 1.5 * self.walk_dir
+                self.dog_sx += GAITS["trot-brisk"].speed * self.walk_dir
                 if self.dog_sx >= self.bed_cx:
                     self.dog_sx = float(self.bed_cx)
                     self.returning = False
@@ -350,7 +395,7 @@ class Biscuit(QWidget):
                     self._arm_sleep_timer()
             else:
                 # Roaming — bounce between walk_min and walk_max
-                self.dog_sx += 1.5 * self.walk_dir
+                self.dog_sx += GAITS["trot-brisk"].speed * self.walk_dir
                 if self.dog_sx >= self.walk_max:
                     self.walk_dir = -1
                     self.facing = -1
@@ -514,6 +559,9 @@ class Biscuit(QWidget):
             head_bob = 0
             if self.state == State.DRINKING and self.task_phase == 1 and self.bowl_full:
                 head_bob = int(max(0, math.sin(self.task_frames * 0.25)) * 10)
+            g = self._active_gait()
+            if is_walking_anim and g is not None:
+                head_bob += g.head_down      # plod travels head-low
 
             # Standing (ALERT) fidgets handled at this level: whole-body
             # shake-off jitter, and the bone-from-pocket chew's bob + bone.
@@ -531,11 +579,11 @@ class Biscuit(QWidget):
                     and 0.15 < fa.progress < 0.9):
                 self._draw_bone(p, cx, base, f, head_bob)
 
-        # Ball carried by dog (RETURNING_BALL state)
+        # Ball carried by dog (RETURNING_BALL state; mouth rides at plod height)
         if self.state == State.RETURNING_BALL:
             r = 6
             bx = int(self.dog_sx) + self.facing * 28
-            by = base - 45
+            by = base - 45 + GAITS["plod"].head_down
             p.setPen(Qt.NoPen)
             p.setBrush(QColor(215, 70, 45))
             p.drawEllipse(bx - r, by, r * 2, r * 2)
@@ -682,6 +730,11 @@ class Biscuit(QWidget):
             else:
                 sit = 1.0
 
+        # Gait while travelling: leg swing / body bounce / wag come from it
+        gait = self._active_gait() if walking else None
+        if gait is not None and gait.bounce > 0:
+            base -= int(abs(math.sin(self.walk_phase)) * gait.bounce)
+
         bw = 52
         bh = 17
         leg_len = 17
@@ -696,7 +749,7 @@ class Biscuit(QWidget):
         p.setBrush(DARK)
         leg_xs = [-18, -6, 8, 20]
         if walking:
-            sw = math.sin(self.walk_phase) * 5
+            sw = math.sin(self.walk_phase) * (gait.swing if gait else 5)
             swings = [-sw, sw, sw, -sw]
         else:
             swings = [0.0] * 4
@@ -724,7 +777,9 @@ class Biscuit(QWidget):
 
         # Tail. ALERT's idle signature is a gentle sway — the full-speed wag
         # is reserved for walking/excited (and the wag-burst fidget).
-        if excited or walking:
+        if walking and gait is not None:
+            wag = math.sin(self.tail_phase) * gait.wag
+        elif excited or walking:
             wag = math.sin(self.tail_phase) * 12
         elif alert:
             wag = math.sin(self.tail_phase * 0.45) * 5
@@ -918,13 +973,15 @@ class Biscuit(QWidget):
     # ── helper ───────────────────────────────────────────────────────────────
 
     def _walk_toward(self, dest):
-        """Move dog one step toward dest. Returns True when arrived."""
+        """Move dog one step toward dest at the current gait. True = arrived."""
+        g = self._active_gait()
+        speed = g.speed if g is not None else GAITS["trot-brisk"].speed
         diff = dest - self.dog_sx
-        if abs(diff) < 2.0:
+        if abs(diff) < 2.0 or abs(diff) <= speed:
             self.dog_sx = float(dest)
             return True
         self.facing = 1 if diff > 0 else -1
-        self.dog_sx += 1.5 * self.facing
+        self.dog_sx += speed * self.facing
         return abs(self.dog_sx - dest) < 2.0
 
     def _check_pending(self):
@@ -1043,7 +1100,7 @@ class Biscuit(QWidget):
                 self.state = State.TASK_RETURN
                 return
             self.facing = 1 if diff > 0 else -1
-            self.dog_sx += 0.75 * self.facing           # half normal speed
+            self.dog_sx += GAITS["sniff-walk"].speed * self.facing
             # Trigger a sniff-pause when crossing the next pause point
             if self.facing == -1 and self.dog_sx <= self.sniff_next_pause:
                 self.task_phase = 1

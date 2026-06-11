@@ -1,0 +1,10 @@
+PASS  WALKING roam: anim+speed+phase  [anim=trot-brisk speed=1.50px/tick (expect 1.5) phase/tick=0.25 (expect 0.25)]
+PASS  TASK_RETURN home: anim+speed+phase  [anim=plod speed=0.90px/tick (expect 0.9) phase/tick=0.15 (expect 0.15)]
+PASS  RETURNING_BALL home: anim+speed+phase  [anim=plod-carry speed=0.90px/tick (expect 0.9) phase/tick=0.15 (expect 0.15)]
+PASS  FETCHING ball: anim+speed+phase  [anim=scamper speed=2.60px/tick (expect 2.6) phase/tick=0.42 (expect 0.42)]
+PASS  SNIFF_WALK: anim+speed+phase  [anim=sniff-walk speed=0.75px/tick (expect 0.75) phase/tick=0.12 (expect 0.12)]
+PASS  sniff-walk pause-and-go intact
+PASS  gaits ordered scamper > brisk > plod > sniff  [trot-brisk=2 plod=1 plod-carry=1 scamper=3 sniff-walk=1]
+PASS  TASK_RETURN completes back to SLEEPING  [state=SLEEPING]
+
+ALL CHECKS PASSED

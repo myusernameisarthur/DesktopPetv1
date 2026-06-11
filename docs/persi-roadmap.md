@@ -109,7 +109,7 @@ defined per behavior.
 Exit criteria: toggling any behavior off stops it firing, survives a restart, and the Test menu
 still force-fires it for debugging regardless of the switch.
 
-### Phase 3 — Distinct gaits
+### Phase 3 — Distinct gaits ✅ DONE 2026-06-11 (see PHASE-3-REPORT.md)
 
 Goal: kill the "six states, one trot" tell. Author at least brisk trot, plod, and scamper, and
 route states to them (map in the design map, Part 3). Sniff-walk gets its slow nose-down gait.
@@ -237,7 +237,7 @@ comes after the freeze.
 Phase 0  done            POC + skill + HUD + git safety
 Phase 1  done            fidgets, the life layer
 Phase 2  done            every behavior toggleable
-Phase 3  gaits           distinct locomotion
+Phase 3  done            distinct locomotion
 Phase 4  enablers        gesture / type-along / window-bark (+risks)
 Phase 5  new behaviors   beg, greet, zoomies -> FREEZE list
 Phase 6  art             frames, spritesheets, renderer swap
