@@ -80,7 +80,7 @@ Every row gets an on/off switch (Phase 2). "New" marks behaviors not yet built.
 
 ## Phases
 
-### Phase 1 — Idle micro-behavior engine + fidget catalogs
+### Phase 1 — Idle micro-behavior engine + fidget catalogs ✅ DONE 2026-06-11 (see PHASE-1-REPORT.md)
 
 Goal: idle Persi feels alive. Build the variability engine (irregular timing, weighting,
 no-repeat memory, one-fidget-at-a-time) and the lying/standing fidget catalogs from the design
@@ -235,7 +235,7 @@ comes after the freeze.
 
 ```
 Phase 0  done            POC + skill + HUD + git safety
-Phase 1  idle engine     fidgets, the life layer            <- build next
+Phase 1  done            fidgets, the life layer
 Phase 2  settings board  every behavior toggleable
 Phase 3  gaits           distinct locomotion
 Phase 4  enablers        gesture / type-along / window-bark (+risks)

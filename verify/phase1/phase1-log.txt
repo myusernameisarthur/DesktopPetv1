@@ -1,0 +1,52 @@
+start: state=SLEEPING (expect SLEEPING)
+  shot -> verify/phase1/lying-baseline.png
+[lying] ear-flick: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-ear-flick.png
+[lying] nose-twitch: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-nose-twitch.png
+[lying] tail-twitch: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-tail-twitch.png
+[lying] sigh: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-sigh.png
+[lying] dream-kick: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-dream-kick.png
+[lying] eye-crack: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-eye-crack.png
+[lying] resettle: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-resettle.png
+[lying] scratch: active-at-midpoint=True state=SLEEPING
+  shot -> verify/phase1/lying-scratch.png
+cursor moved near dog (expect ALERT)
+state=ALERT (expect ALERT)
+  shot -> verify/phase1/standing-alert-baseline.png
+[standing] blink: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-blink.png
+[standing] ear-swivel: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-ear-swivel.png
+[standing] weight-shift: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-weight-shift.png
+[standing] head-tilt: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-head-tilt.png
+[standing] look-around: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-look-around.png
+[standing] wag-burst: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-wag-burst.png
+[standing] shake-off: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-shake-off.png
+[standing] bone-chew: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-bone-chew.png
+[standing] sit: active-at-midpoint=True state=ALERT
+  shot -> verify/phase1/standing-sit.png
+click-through: on-dog-hits-overlay=True empty-strip-passes-through=True hud-passes-through=True
+soak: lying, 45s at rate_mult=6
+soak: standing (ALERT), 30s
+soak events: lying=15 standing=11
+  lying sequence: ear-swivel ear-flick eye-crack tail-twitch nose-twitch dream-kick scratch ear-flick sigh tail-twitch nose-twitch ear-flick eye-crack nose-twitch resettle
+  lying: distinct=9
+  lying gaps(s): [4.34, 1.72, 3.42, 1.8, 2.03, 2.27, 3.38, 2.33, 4.08, 1.72, 4.02, 5.33, 3.62, 1.69]
+  standing sequence: blink head-tilt look-around ear-swivel wag-burst blink bone-chew ear-swivel blink weight-shift head-tilt
+  standing: distinct=7
+  standing gaps(s): [1.48, 1.95, 2.78, 4.53, 2.8, 1.16, 716.59, 2.58, 1.64, 2.36]
+idle CPU over 10.0s: 3.8% of one core
+
+ALL CHECKS PASSED

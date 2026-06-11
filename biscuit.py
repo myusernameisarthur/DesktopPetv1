@@ -12,6 +12,8 @@ from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRegion,
                          QPainterPath, QFont, QCursor)
 
+from fidgets import FidgetEngine, POSE_LYING, POSE_STANDING
+
 
 class State(Enum):
     SLEEPING = 0
@@ -160,6 +162,11 @@ class Biscuit(QWidget):
         self.sniff_dest = 0.0
         self.sniff_next_pause = 0.0
 
+        # Idle fidget layer: small motions that never change self.state.
+        # The engine picks them; the _draw_* methods read self.fidgets.active
+        # and apply small deltas on the base pose.
+        self.fidgets = FidgetEngine()
+
         # Reminder settings & pending flags
         self.stretch_enabled = True
         self.water_enabled = True
@@ -272,6 +279,25 @@ class Biscuit(QWidget):
 
         if not self.paused:
             self._update_state()
+
+        # Idle fidgets — only while resting (lying) or alert (standing); the
+        # engine cancels any in-flight fidget the moment the pose stops being
+        # eligible, so fidgets can never overlap a real behavior or one-shot.
+        if self.paused:
+            self.fidgets.tick(None)
+        else:
+            if self.state == State.SLEEPING:
+                self.fidgets.tick(POSE_LYING)
+            elif self.state == State.ALERT:
+                self.fidgets.tick(POSE_STANDING)
+            else:
+                self.fidgets.tick(None)
+            fa = self.fidgets.active
+            # The sigh's exhale releases one soft "z" puff at the swell's peak.
+            if (fa is not None and fa.name == "sigh"
+                    and fa.ticks == fa.total // 3):
+                hx = int(self.dog_sx) + self.facing * 25
+                self.bubbles.append(ZzzBubble(hx, DOG_BASE - 42, 9))
 
         # Zzz
         if self.state == State.SLEEPING and not self.paused:
@@ -426,9 +452,20 @@ class Biscuit(QWidget):
         # Corner home objects drawn first
         self._draw_corner(p)
 
+        fa = self.fidgets.active   # idle fidget delta (None outside SLEEPING/ALERT)
+
         # Dog visual
         if self.state in (State.SLEEPING, State.STRETCHING):
-            self._draw_sleeping(p, cx, base, f, BROWN, DARK, BLACK)
+            if fa is not None and fa.name == "scratch":
+                # Lying scratch fidget: same body jitter + kicking leg as the
+                # full SCRATCHING state, just short and without a state change.
+                jx = int(math.sin(fa.ticks * 0.65) * 1.5)
+                jy = int(math.cos(fa.ticks * 0.73) * 1.0)
+                self._draw_sleeping(p, cx + jx, base + jy, f, BROWN, DARK, BLACK)
+                self._draw_scratch_leg(p, cx + jx, base + jy, f, DARK,
+                                       frames=fa.ticks)
+            else:
+                self._draw_sleeping(p, cx, base, f, BROWN, DARK, BLACK)
 
         elif self.state == State.SCRATCHING:
             shake_x = int(math.sin(self.task_frames * 0.65) * 1.5)
@@ -455,8 +492,22 @@ class Biscuit(QWidget):
             head_bob = 0
             if self.state == State.DRINKING and self.task_phase == 1 and self.bowl_full:
                 head_bob = int(max(0, math.sin(self.task_frames * 0.25)) * 10)
+
+            # Standing (ALERT) fidgets handled at this level: whole-body
+            # shake-off jitter, and the bone-from-pocket chew's bob + bone.
+            if alert and fa is not None and fa.name == "shake-off":
+                amp = math.sin(fa.progress * math.pi)        # ramp in and out
+                cx += int(math.sin(fa.ticks * 1.15) * 3 * amp)
+            if alert and fa is not None and fa.name == "bone-chew":
+                if 0.2 < fa.progress < 0.85:                 # gnawing window
+                    head_bob = int(max(0, math.sin(fa.ticks * 0.30)) * 5)
+
             self._draw_standing(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
                                 is_walking_anim, excited, alert, head_bob=head_bob)
+
+            if (alert and fa is not None and fa.name == "bone-chew"
+                    and 0.15 < fa.progress < 0.9):
+                self._draw_bone(p, cx, base, f, head_bob)
 
         # Ball carried by dog (RETURNING_BALL state)
         if self.state == State.RETURNING_BALL:
@@ -514,19 +565,35 @@ class Biscuit(QWidget):
             p.drawEllipse(bx - r + 2, ground - r * 2 + 2, r // 2 + 2, r // 2 + 1)
 
     def _draw_sleeping(self, p, cx, base, f, BROWN, DARK, BLACK):
+        # Active lying fidget (engine guarantees None outside SLEEPING; the
+        # 'scratch' fidget is handled by the caller, so no delta here).
+        fa = self.fidgets.active
+        fname = fa.name if fa is not None else None
+        fticks = fa.ticks if fa is not None else 0
+        fswell = math.sin(fa.progress * math.pi) if fa is not None else 0.0
+
+        if fname == "resettle":
+            # Body shifts toward the tail a touch and re-curls (compresses).
+            cx += int(fswell * -f * 4)
+
         stretch_extra = int(self.stretch_factor * 25)
         bw = 68 + stretch_extra
         bh = int(18 + math.sin(self.breath_phase) * 1.5)
+        if fname == "sigh":
+            bh += int(fswell * 3)          # one larger breath swell
+        elif fname == "resettle":
+            bh -= int(fswell * 2)
         body_top = base - bh
 
         # Tail (at the back = opposite of facing)
+        tail_lift = fswell * 7 if fname == "tail-twitch" else 0.0
         tx = cx - f * (bw // 2 - 4)
         p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(Qt.NoBrush)
         tp = QPainterPath()
         tp.moveTo(tx, body_top + bh // 2)
-        tp.quadTo(tx - f * (-10), body_top - 6,
-                  tx - f * (-4),  body_top - 17)
+        tp.quadTo(tx - f * (-10), body_top - 6 - tail_lift * 0.5,
+                  tx - f * (-4),  body_top - 17 - tail_lift)
         p.drawPath(tp)
 
         # Body
@@ -541,15 +608,24 @@ class Biscuit(QWidget):
         p.setBrush(BROWN)
         p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
 
-        # Ear
+        # Ear (flick = quick lift-and-settle)
+        ear_dy = -int(fswell * 4) if fname == "ear-flick" else 0
+        ear_h = 14 - (int(fswell * 3) if fname == "ear-flick" else 0)
         p.setBrush(DARK)
-        p.drawEllipse(int(hcx - f * 3 - 5), int(hcy - hr + 3), 9, 14)
+        p.drawEllipse(int(hcx - f * 3 - 5), int(hcy - hr + 3 + ear_dy), 9, ear_h)
 
-        # Eye closed
-        p.setPen(QPen(BLACK, 1.5, Qt.SolidLine, Qt.RoundCap))
-        p.drawArc(int(hcx + f * 3 - 4), int(hcy - 4), 8, 6, 0, -180 * 16)
+        # Eye: closed arc, or a sliver cracking open mid-fidget
+        if fname == "eye-crack" and 0.25 < fa.progress < 0.75:
+            p.setPen(Qt.NoPen)
+            p.setBrush(BLACK)
+            p.drawEllipse(int(hcx + f * 3 - 3), int(hcy - 3), 6, 3)
+        else:
+            p.setPen(QPen(BLACK, 1.5, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(int(hcx + f * 3 - 4), int(hcy - 4), 8, 6, 0, -180 * 16)
 
         # Nose / yawn (yawn opens during stretch)
+        nose_dx = int(round(math.sin(fticks * 0.9) * 1.5)) \
+            if fname == "nose-twitch" else 0
         p.setPen(Qt.NoPen)
         if self.stretch_factor > 0.4:
             yawn_h = max(2, int(self.stretch_factor * 8))
@@ -557,20 +633,41 @@ class Biscuit(QWidget):
             p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 2), 7, yawn_h)
         else:
             p.setBrush(BLACK)
-            p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 2), 7, 5)
+            p.drawEllipse(int(hcx + f * 9 - 3 + nose_dx), int(hcy + 2), 7, 5)
 
-        # Legs tucked
+        # Legs tucked (dream-kick = alternating little twitches)
+        kick = math.sin(fticks * 1.1) * 2 if fname == "dream-kick" else 0.0
         p.setBrush(DARK)
-        for lo in [-20, -7, 7, 20]:
-            p.drawRoundedRect(cx + lo - 3, base - 9, 6, 9, 3, 3)
+        for i, lo in enumerate([-20, -7, 7, 20]):
+            leg_dx = int(kick) if i % 2 == 0 else -int(kick)
+            p.drawRoundedRect(cx + lo - 3 + leg_dx, base - 9, 6, 9, 3, 3)
 
     def _draw_standing(self, p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK,
                        walking, excited, alert, head_bob=0):
+        # Standing fidget deltas only apply in ALERT (the standing idle pose);
+        # shake-off and bone-chew are handled by the caller in _draw.
+        fa = self.fidgets.active if alert else None
+        fname = fa.name if fa is not None else None
+        fswell = math.sin(fa.progress * math.pi) if fa is not None else 0.0
+
+        sit = 0.0                       # 0 = standing, 1 = fully sat
+        if fname == "sit":
+            pr = fa.progress            # ramp down, hold, stand back up
+            if pr < 0.25:
+                sit = pr / 0.25
+            elif pr > 0.8:
+                sit = (1.0 - pr) / 0.2
+            else:
+                sit = 1.0
+
         bw = 52
         bh = 17
         leg_len = 17
         body_bottom = base - leg_len
         body_top = body_bottom - bh
+
+        # Weight-shift fidget: body/head/tail lean back a touch; legs stay put
+        lean = int(fswell * -f * 3) if fname == "weight-shift" else 0
 
         # Legs
         p.setPen(Qt.NoPen)
@@ -583,17 +680,38 @@ class Biscuit(QWidget):
             swings = [0.0] * 4
         for i, lx in enumerate(leg_xs):
             extra = abs(swings[i])
+            ll = leg_len + extra
+            is_rear = (lx < 0) if f > 0 else (lx > 0)
+            if sit > 0 and is_rear:     # rear pair folds under the hips
+                ll -= sit * 10
             p.drawRoundedRect(int(cx + lx - 2), body_bottom - 1,
-                              5, int(leg_len + extra), 2, 2)
+                              5, int(ll), 2, 2)
 
-        # Body
+        # Body (sitting tips it down at the rear, pivoting at the front hip)
         p.setBrush(BROWN)
-        p.drawEllipse(cx - bw // 2, body_top, bw, bh)
+        if sit > 0:
+            pivot_x = cx + f * (bw // 2 - 8)
+            p.save()
+            p.translate(pivot_x, body_bottom)
+            p.rotate(-f * sit * 14)
+            p.translate(-pivot_x, -body_bottom)
+            p.drawEllipse(cx + lean - bw // 2, body_top, bw, bh)
+            p.restore()
+        else:
+            p.drawEllipse(cx + lean - bw // 2, body_top, bw, bh)
 
-        # Tail
-        wag = math.sin(self.tail_phase) * 12 if (alert or excited or walking) else 5
-        tx = cx - f * (bw // 2 - 3)
-        ty = body_top + bh // 2
+        # Tail. ALERT's idle signature is a gentle sway — the full-speed wag
+        # is reserved for walking/excited (and the wag-burst fidget).
+        if excited or walking:
+            wag = math.sin(self.tail_phase) * 12
+        elif alert:
+            wag = math.sin(self.tail_phase * 0.45) * 5
+            if fname == "wag-burst":
+                wag = math.sin(self.tail_phase * 2.2) * 13 * max(0.35, fswell)
+        else:
+            wag = 5
+        tx = cx + lean - f * (bw // 2 - 3)
+        ty = body_top + bh // 2 + int(sit * 8)
         p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
         p.setBrush(Qt.NoBrush)
         tp = QPainterPath()
@@ -603,21 +721,36 @@ class Biscuit(QWidget):
 
         # Head
         hr = 13
-        hcx = cx + f * (bw // 2 - 2)
-        hcy = body_top - 4 + head_bob
+        hcx = cx + lean + f * (bw // 2 - 2)
+        hcy = body_top - 4 + head_bob - int(sit * 3)
+        if fname == "head-tilt":
+            hcx += int(f * fswell * 2)
+            hcy += int(fswell * 3)
+        elif fname == "look-around":
+            # glance back over the shoulder, then forward again
+            hcx += int(f * math.sin(fa.progress * 2 * math.pi) * -4)
         p.setPen(Qt.NoPen)
         p.setBrush(BROWN)
         p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
 
-        # Ear
+        # Ear: pricked up in ALERT (its idle signature), relaxed otherwise
+        ear_dx = int(f * fswell * 3) if fname == "ear-swivel" else 0
         p.setBrush(DARK)
-        p.drawEllipse(int(hcx - f * 2 - 5), int(hcy - hr - 2), 9, 14)
+        if alert:
+            p.drawEllipse(int(hcx - f * 2 - 4 + ear_dx), int(hcy - hr - 6), 8, 16)
+        else:
+            p.drawEllipse(int(hcx - f * 2 - 5 + ear_dx), int(hcy - hr - 2), 9, 14)
 
-        # Eye
-        p.setBrush(BLACK)
-        p.drawEllipse(int(hcx + f * 4 - 3), int(hcy - 7), 6, 6)
-        p.setBrush(WHITE)
-        p.drawEllipse(int(hcx + f * 4 - 1), int(hcy - 6), 2, 2)
+        # Eye (blink fidget closes it for a beat)
+        if fname == "blink":
+            p.setPen(QPen(BLACK, 1.5, Qt.SolidLine, Qt.RoundCap))
+            p.drawArc(int(hcx + f * 4 - 4), int(hcy - 6), 8, 6, 0, -180 * 16)
+            p.setPen(Qt.NoPen)
+        else:
+            p.setBrush(BLACK)
+            p.drawEllipse(int(hcx + f * 4 - 3), int(hcy - 7), 6, 6)
+            p.setBrush(WHITE)
+            p.drawEllipse(int(hcx + f * 4 - 1), int(hcy - 6), 2, 2)
 
         # Nose
         p.setPen(Qt.NoPen)
@@ -898,9 +1031,11 @@ class Biscuit(QWidget):
 
     # ── idle behaviour drawing ────────────────────────────────────────────────
 
-    def _draw_scratch_leg(self, p, cx, base, f, DARK):
-        """Kicking back leg for the scratch animation."""
-        kick = math.sin(self.task_frames * 0.85)       # rapid oscillation
+    def _draw_scratch_leg(self, p, cx, base, f, DARK, frames=None):
+        """Kicking back leg for the scratch animation (state or fidget)."""
+        if frames is None:
+            frames = self.task_frames
+        kick = math.sin(frames * 0.85)                 # rapid oscillation
         # Back hip is on the opposite side from the head
         hip_x = int(cx - f * 14)
         hip_y = base - 8

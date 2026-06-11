@@ -117,10 +117,11 @@ class DebugHUD(QWidget):
         self._x_value = self._x_label + fm_l.horizontalAdvance("M" * 8)
         self._line_h = fm_l.height() + 3
         self._y0 = self._pad + fm_l.ascent()
-        # Widest realistic value is the longest state name.
-        widest_val = fm_v.horizontalAdvance("RETURNING_BALL")
+        # Widest realistic values: longest state name / longest fidget line.
+        widest_val = max(fm_v.horizontalAdvance("RETURNING_BALL"),
+                         fm_v.horizontalAdvance("weight-shift 0.5s"))
         w = self._x_value + widest_val + self._pad
-        h = self._y0 + self._line_h * 5 + fm_l.descent() + self._pad
+        h = self._y0 + self._line_h * 6 + fm_l.descent() + self._pad
         self.setFixedSize(w, h)
         # Click-through at the Qt level: the whole window ignores mouse input, so
         # it can never capture a click or interfere with the dog's mask-based
@@ -166,9 +167,14 @@ class DebugHUD(QWidget):
             self._t0 = time.monotonic()
         secs = time.monotonic() - self._t0
 
+        fidgets = getattr(dog, "fidgets", None)
+        fa = fidgets.active if fidgets is not None else None
+        fidget_val = f"{fa.name} {fa.remaining_s:.1f}s" if fa is not None else "-"
+
         self._lines = [
             ("STATE", dog.state.name),
             ("ANIM", dog.current_anim()),
+            ("FIDGET", fidget_val),
             ("PHASE", hud_phase(dog)),
             ("FACING", "left" if dog.facing < 0 else "right"),
             ("t/state", f"{secs:4.1f}s"),
