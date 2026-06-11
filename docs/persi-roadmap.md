@@ -95,7 +95,7 @@ reading like a paused walk.
 Exit criteria: watching idle Persi for two minutes shows varied, non-repeating motion at a calm
 rate, and the HUD confirms fidget variety.
 
-### Phase 2 — Settings control board (every behavior toggleable)
+### Phase 2 — Settings control board (every behavior toggleable) ✅ DONE 2026-06-11 (see PHASE-2-REPORT.md)
 
 Goal: one switch per behavior, remembered between launches. This is foundational because every
 later behavior plugs into it.
@@ -236,7 +236,7 @@ comes after the freeze.
 ```
 Phase 0  done            POC + skill + HUD + git safety
 Phase 1  done            fidgets, the life layer
-Phase 2  settings board  every behavior toggleable
+Phase 2  done            every behavior toggleable
 Phase 3  gaits           distinct locomotion
 Phase 4  enablers        gesture / type-along / window-bark (+risks)
 Phase 5  new behaviors   beg, greet, zoomies -> FREEZE list

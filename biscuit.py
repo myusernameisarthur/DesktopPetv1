@@ -13,6 +13,7 @@ from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRegion,
                          QPainterPath, QFont, QCursor)
 
 from fidgets import FidgetEngine, POSE_LYING, POSE_STANDING
+from settings import Settings
 
 
 class State(Enum):
@@ -167,9 +168,12 @@ class Biscuit(QWidget):
         # and apply small deltas on the base pose.
         self.fidgets = FidgetEngine()
 
-        # Reminder settings & pending flags
-        self.stretch_enabled = True
-        self.water_enabled = True
+        # Per-behavior on/off switches, persisted to %APPDATA%\Persi.
+        # Behaviors read their switch when they would fire; the Test menu
+        # bypasses the switches by setting states directly.
+        self.settings = Settings()
+
+        # Reminder pending flags
         self.stretch_pending = False
         self.water_pending = False
 
@@ -208,9 +212,10 @@ class Biscuit(QWidget):
 
         # === DEBUG HUD (dev tool — delete this block + debug_hud.py to remove) ===
         from debug_hud import DebugHUD
-        self.hud_enabled = True
+        self.hud_enabled = self.settings.get("debug.hud")
         self._hud = DebugHUD(self)
-        self._hud.show()
+        if self.hud_enabled:
+            self._hud.show()
         # === end DEBUG HUD ===
 
     def current_anim(self):
@@ -258,23 +263,30 @@ class Biscuit(QWidget):
         self.tail_phase += 0.15
         self.walk_phase += 0.25
 
-        # Cursor proximity
-        cp = QCursor.pos()
-        dog_screen_cy = self.tb_top - 25
-        dist = math.hypot(cp.x() - self.dog_sx, cp.y() - dog_screen_cy)
-        was_near = self.cursor_near
-        self.cursor_near = dist < 150
+        # Cursor proximity (behavior switch: interactive.cursor_alert)
+        if self.settings.get("interactive.cursor_alert"):
+            cp = QCursor.pos()
+            dog_screen_cy = self.tb_top - 25
+            dist = math.hypot(cp.x() - self.dog_sx, cp.y() - dog_screen_cy)
+            was_near = self.cursor_near
+            self.cursor_near = dist < 150
 
-        if self.cursor_near:
-            self.facing = -1 if cp.x() < self.dog_sx else 1
-            if not was_near and self.state == State.SLEEPING:
-                self.state = State.ALERT
-                self.bubbles.clear()
-            self.cursor_settle = 90
+            if self.cursor_near:
+                self.facing = -1 if cp.x() < self.dog_sx else 1
+                if not was_near and self.state == State.SLEEPING:
+                    self.state = State.ALERT
+                    self.bubbles.clear()
+                self.cursor_settle = 90
 
-        if not self.cursor_near and self.cursor_settle > 0:
-            self.cursor_settle -= 1
-            if self.cursor_settle == 0 and self.state == State.ALERT:
+            if not self.cursor_near and self.cursor_settle > 0:
+                self.cursor_settle -= 1
+                if self.cursor_settle == 0 and self.state == State.ALERT:
+                    self.state = State.SLEEPING
+        elif self.cursor_near or self.cursor_settle > 0:
+            # Switch turned off mid-alert: settle straight back to sleep
+            self.cursor_near = False
+            self.cursor_settle = 0
+            if self.state == State.ALERT:
                 self.state = State.SLEEPING
 
         if not self.paused:
@@ -286,9 +298,11 @@ class Biscuit(QWidget):
         if self.paused:
             self.fidgets.tick(None)
         else:
-            if self.state == State.SLEEPING:
+            if (self.state == State.SLEEPING
+                    and self.settings.get("idle.fidgets_lying")):
                 self.fidgets.tick(POSE_LYING)
-            elif self.state == State.ALERT:
+            elif (self.state == State.ALERT
+                    and self.settings.get("idle.fidgets_standing")):
                 self.fidgets.tick(POSE_STANDING)
             else:
                 self.fidgets.tick(None)
@@ -398,8 +412,16 @@ class Biscuit(QWidget):
             self.bubbles.clear()
             return
 
-        # Equal chance of: normal walk, scratch, chew, sniff-walk
-        behavior = random.choice(('walk', 'scratch', 'chew', 'sniff'))
+        # Equal chance among the ambient behaviors that are switched on
+        choices = [b for b, key in (('walk', 'idle.wander_walk'),
+                                    ('scratch', 'idle.scratch'),
+                                    ('chew', 'idle.chew'),
+                                    ('sniff', 'idle.sniff_walk'))
+                   if self.settings.get(key)]
+        if not choices:
+            self._arm_sleep_timer()     # everything off: keep sleeping
+            return
+        behavior = random.choice(choices)
         self.bubbles.clear()
         self.task_phase = 0
         self.task_frames = 0
@@ -770,7 +792,8 @@ class Biscuit(QWidget):
 
         if event.button() == Qt.LeftButton:
             # Ball click — only when ball is at home corner and no fetch in progress
-            if (self.ball_visible
+            if (self.settings.get("interactive.fetch_ball")
+                    and self.ball_visible
                     and abs(self.ball_x - self.ball_cx) < 5
                     and abs(lx - self.ball_cx) < 12
                     and ly > WIN_H - 20
@@ -784,7 +807,7 @@ class Biscuit(QWidget):
                 return
 
             # Dog click
-            if not self.paused:
+            if not self.paused and self.settings.get("interactive.excited_on_click"):
                 old_state = self.state
                 self.state = State.EXCITED
                 self.tongue = True
@@ -802,77 +825,84 @@ class Biscuit(QWidget):
         elif event.button() == Qt.RightButton:
             self._show_menu(event.globalPos())
 
-    def _show_menu(self, pos):
+    def _add_toggle(self, menu, label, key):
+        """Checkable menu action wired to a persisted behavior switch."""
+        a = QAction(label, self)
+        a.setCheckable(True)
+        a.setChecked(self.settings.get(key))
+        a.triggered.connect(lambda chk, k=key: self.settings.set(k, chk))
+        menu.addAction(a)
+        return a
+
+    def _build_menu(self):
         menu = QMenu(self)
 
         a_pause = QAction("Pause animations", self)
         a_pause.setCheckable(True)
         a_pause.setChecked(self.paused)
         a_pause.triggered.connect(lambda chk: setattr(self, "paused", chk))
+        menu.addAction(a_pause)
 
         a_start = QAction("Launch at startup", self)
         a_start.setCheckable(True)
         a_start.setChecked(self.startup_enabled)
         a_start.triggered.connect(self._handle_startup)
+        menu.addAction(a_start)
 
-        a_stretch = QAction("Stretch reminders", self)
-        a_stretch.setCheckable(True)
-        a_stretch.setChecked(self.stretch_enabled)
-        a_stretch.triggered.connect(lambda chk: setattr(self, "stretch_enabled", chk))
+        menu.addSeparator()
+        menu.addSection("Behaviors")
 
-        a_water = QAction("Water reminders", self)
-        a_water.setCheckable(True)
-        a_water.setChecked(self.water_enabled)
-        a_water.triggered.connect(lambda chk: setattr(self, "water_enabled", chk))
+        m_idle = menu.addMenu("Idle")
+        self._add_toggle(m_idle, "Fidgets while lying", "idle.fidgets_lying")
+        self._add_toggle(m_idle, "Fidgets while standing", "idle.fidgets_standing")
+        self._add_toggle(m_idle, "Wander walk", "idle.wander_walk")
+        self._add_toggle(m_idle, "Scratch", "idle.scratch")
+        self._add_toggle(m_idle, "Chew bone", "idle.chew")
+        self._add_toggle(m_idle, "Sniff walk", "idle.sniff_walk")
+
+        m_timed = menu.addMenu("Timed")
+        self._add_toggle(m_timed, "Stretch reminders", "timed.stretch_reminders")
+        self._add_toggle(m_timed, "Water reminders", "timed.water_reminders")
+
+        m_inter = menu.addMenu("Interactive")
+        self._add_toggle(m_inter, "Alert when cursor is near", "interactive.cursor_alert")
+        self._add_toggle(m_inter, "Excited when clicked", "interactive.excited_on_click")
+        self._add_toggle(m_inter, "Fetch the ball", "interactive.fetch_ball")
+
+        menu.addSeparator()
+        menu.addSection("Test")
+        for label, handler in (("Test: stretch", self._test_stretch),
+                               ("Test: water reminder", self._test_water),
+                               ("Test: fetch", self._test_fetch),
+                               ("Test: scratch", self._test_scratch),
+                               ("Test: chew bone", self._test_chew),
+                               ("Test: sniff walk", self._test_sniff)):
+            a = QAction(label, self)
+            a.triggered.connect(handler)
+            menu.addAction(a)
+
+        menu.addSeparator()
 
         # === DEBUG HUD (dev tool — delete this block to remove) ===
         a_hud = QAction("Debug: show state HUD", self)
         a_hud.setCheckable(True)
         a_hud.setChecked(getattr(self, "hud_enabled", False))
         a_hud.triggered.connect(self._toggle_hud)
+        menu.addAction(a_hud)
         # === end DEBUG HUD ===
 
         a_quit = QAction("Quit", self)
         a_quit.triggered.connect(QApplication.quit)
-
-        a_test_stretch = QAction("Test: stretch", self)
-        a_test_stretch.triggered.connect(self._test_stretch)
-
-        a_test_water = QAction("Test: water reminder", self)
-        a_test_water.triggered.connect(self._test_water)
-
-        a_test_fetch = QAction("Test: fetch", self)
-        a_test_fetch.triggered.connect(self._test_fetch)
-
-        a_test_scratch = QAction("Test: scratch", self)
-        a_test_scratch.triggered.connect(self._test_scratch)
-
-        a_test_chew = QAction("Test: chew bone", self)
-        a_test_chew.triggered.connect(self._test_chew)
-
-        a_test_sniff = QAction("Test: sniff walk", self)
-        a_test_sniff.triggered.connect(self._test_sniff)
-
-        menu.addAction(a_pause)
-        menu.addAction(a_start)
-        menu.addAction(a_stretch)
-        menu.addAction(a_water)
-        menu.addSeparator()
-        menu.addSection("Test")
-        menu.addAction(a_test_stretch)
-        menu.addAction(a_test_water)
-        menu.addAction(a_test_fetch)
-        menu.addAction(a_test_scratch)
-        menu.addAction(a_test_chew)
-        menu.addAction(a_test_sniff)
-        menu.addSeparator()
-        menu.addAction(a_hud)   # === DEBUG HUD ===
         menu.addAction(a_quit)
-        menu.exec_(pos)
+        return menu
+
+    def _show_menu(self, pos):
+        self._build_menu().exec_(pos)
 
     # === DEBUG HUD (dev tool — delete this method to remove) ===
     def _toggle_hud(self, checked):
         self.hud_enabled = checked
+        self.settings.set("debug.hud", checked)
         if self._hud is not None:
             if checked:
                 self._hud.show()
@@ -904,7 +934,7 @@ class Biscuit(QWidget):
             return
         if self.stretch_pending:
             self.stretch_pending = False
-            if self.stretch_enabled:
+            if self.settings.get("timed.stretch_reminders"):
                 self.bubbles.clear()
                 self._sleep_timer.stop()
                 self.returning = False
@@ -915,7 +945,7 @@ class Biscuit(QWidget):
             return
         if self.water_pending:
             self.water_pending = False
-            if self.water_enabled:
+            if self.settings.get("timed.water_reminders"):
                 self.bubbles.clear()
                 self._sleep_timer.stop()
                 self.returning = False

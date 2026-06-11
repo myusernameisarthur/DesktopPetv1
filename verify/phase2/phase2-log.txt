@@ -1,0 +1,17 @@
+PASS  fresh start uses defaults
+PASS  toggle persists to disk and survives restart
+PASS  corrupt settings file falls back to defaults
+PASS  ambient all off: stays asleep, timer re-armed
+PASS  ambient with only chew on: picks chew  [state=CHEWING]
+PASS  stretch reminder honors its switch
+PASS  water reminder honors its switch
+PASS  cursor alert off: cursor near does nothing  [state=SLEEPING]
+PASS  cursor alert on: cursor near -> ALERT  [state=ALERT]
+PASS  click-excited honors its switch
+PASS  ball-fetch honors its switch
+PASS  fidgets (lying) off: none fire in 4s at 30x rate
+PASS  fidgets (lying) on: they fire again
+PASS  Test menu force-fires with switch off  [state=SCRATCHING]
+PASS  menu: grouped checkable toggles mirror the store + Test intact  [groups=['Idle', 'Interactive', 'Timed'] tests=6]
+
+ALL CHECKS PASSED
