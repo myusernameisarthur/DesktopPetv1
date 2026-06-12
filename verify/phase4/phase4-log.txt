@@ -1,0 +1,12 @@
+PASS  unit: 3 consistent loops complete the gesture  [fired at 3.06 loops]
+PASS  unit: reversing direction cancels accumulation
+PASS  unit: arming window times out
+PASS  unit: leaving the ring past the grace disarms
+PASS  real cursor circling fires ROLL_OVER  [state=ROLL_OVER]
+PASS  HUD GESTURE line live while armed  [hud='2.9/3 loops 9s' max_loops=2.9]
+PASS  dog clickable during ROLL_OVER (mask intact)  [state=ROLL_OVER]
+PASS  ROLL_OVER settles back to SLEEPING  [state=SLEEPING]
+PASS  toggle off: full circling never fires ROLL_OVER  [state=EXCITED]
+PASS  Test: roll over force-fires with toggle off
+
+ALL CHECKS PASSED

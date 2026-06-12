@@ -27,6 +27,8 @@ DEFAULTS = {
     "interactive.cursor_alert": True,
     "interactive.excited_on_click": True,
     "interactive.fetch_ball": True,
+    # Command (deliberate gesture)
+    "command.roll_over": True,
     # Debug (dev tooling; default flips off in Phase 7)
     "debug.hud": True,
 }

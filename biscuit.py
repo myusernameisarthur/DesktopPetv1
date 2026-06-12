@@ -13,6 +13,7 @@ from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRegion,
                          QPainterPath, QFont, QCursor)
 
 from fidgets import FidgetEngine, POSE_LYING, POSE_STANDING
+from gestures import CircleGestureRecognizer
 from settings import Settings
 
 
@@ -29,6 +30,7 @@ class State(Enum):
     SCRATCHING = 9      # idle: back-leg scratch at ear
     CHEWING = 10        # idle: gnaw a bone
     SNIFF_WALK = 11     # idle: slow walk with nose-down pauses
+    ROLL_OVER = 12      # command: circle gesture -> on back, paws up, wriggle
 
 
 # Single source of truth: the animation each state actually renders.
@@ -48,6 +50,7 @@ ANIMATION = {
     State.SCRATCHING:     "scratch",      # _draw_sleeping + kicking back leg
     State.CHEWING:        "chew",         # _draw_standing + head-bob + bone
     State.SNIFF_WALK:     "sniff-walk",   # slow nose-down walk, pause-and-go
+    State.ROLL_OVER:      "roll-over",    # onto the back, paws paddle, right itself
 }
 
 
@@ -200,6 +203,10 @@ class Biscuit(QWidget):
         # and apply small deltas on the base pose.
         self.fidgets = FidgetEngine()
 
+        # Roll-over command gesture: armed by a click on the dog, completed by
+        # circling the cursor around the dog ~3 times (pure cursor math).
+        self.gesture = CircleGestureRecognizer()
+
         # Per-behavior on/off switches, persisted to %APPDATA%\Persi.
         # Behaviors read their switch when they would fire; the Test menu
         # bypasses the switches by setting states directly.
@@ -276,7 +283,8 @@ class Biscuit(QWidget):
 
     def _update_mask(self):
         dx = int(self.dog_sx)
-        if self.state in (State.SLEEPING, State.STRETCHING, State.SCRATCHING):
+        if self.state in (State.SLEEPING, State.STRETCHING, State.SCRATCHING,
+                          State.ROLL_OVER):
             dog_r = QRect(dx - 60, WIN_H - 38, 120, 38)
         else:
             dog_r = QRect(dx - 52, WIN_H - 75, 104, 75)
@@ -308,9 +316,19 @@ class Biscuit(QWidget):
         g = self._active_gait()
         self.walk_phase += g.phase_rate if g is not None else 0.25
 
+        cp = QCursor.pos()
+
+        # Roll-over circle gesture (armed by a dog click; pure cursor math)
+        dog_center_y = self.tb_top - 30
+        if self.gesture.tick(self.dog_sx, dog_center_y, cp.x(), cp.y()):
+            if (not self.paused
+                    and self.settings.get("command.roll_over")
+                    and self.state in (State.SLEEPING, State.ALERT,
+                                       State.EXCITED)):
+                self._start_roll_over()
+
         # Cursor proximity (behavior switch: interactive.cursor_alert)
         if self.settings.get("interactive.cursor_alert"):
-            cp = QCursor.pos()
             dog_screen_cy = self.tb_top - 25
             dist = math.hypot(cp.x() - self.dog_sx, cp.y() - dog_screen_cy)
             was_near = self.cursor_near
@@ -435,6 +453,8 @@ class Biscuit(QWidget):
             self._update_chewing()
         elif self.state == State.SNIFF_WALK:
             self._update_sniff_walk()
+        elif self.state == State.ROLL_OVER:
+            self._update_roll_over()
 
     def _arm_sleep_timer(self):
         """Schedule the next walk after 4–8 minutes of sleep."""
@@ -522,7 +542,10 @@ class Biscuit(QWidget):
         fa = self.fidgets.active   # idle fidget delta (None outside SLEEPING/ALERT)
 
         # Dog visual
-        if self.state in (State.SLEEPING, State.STRETCHING):
+        if self.state == State.ROLL_OVER:
+            self._draw_rollover(p, cx, base, f, BROWN, DARK, BLACK)
+
+        elif self.state in (State.SLEEPING, State.STRETCHING):
             if fa is not None and fa.name == "scratch":
                 # Lying scratch fidget: same body jitter + kicking leg as the
                 # full SCRATCHING state, just short and without a state change.
@@ -861,6 +884,10 @@ class Biscuit(QWidget):
                 self._refill_bowl()
                 return
 
+            # Any dog click arms the roll-over circle gesture
+            if not self.paused:
+                self.gesture.arm()
+
             # Dog click
             if not self.paused and self.settings.get("interactive.excited_on_click"):
                 old_state = self.state
@@ -924,6 +951,10 @@ class Biscuit(QWidget):
         self._add_toggle(m_inter, "Excited when clicked", "interactive.excited_on_click")
         self._add_toggle(m_inter, "Fetch the ball", "interactive.fetch_ball")
 
+        m_cmd = menu.addMenu("Command")
+        self._add_toggle(m_cmd, "Roll over (click, then circle the dog 3x)",
+                         "command.roll_over")
+
         menu.addSeparator()
         menu.addSection("Test")
         for label, handler in (("Test: stretch", self._test_stretch),
@@ -931,7 +962,8 @@ class Biscuit(QWidget):
                                ("Test: fetch", self._test_fetch),
                                ("Test: scratch", self._test_scratch),
                                ("Test: chew bone", self._test_chew),
-                               ("Test: sniff walk", self._test_sniff)):
+                               ("Test: sniff walk", self._test_sniff),
+                               ("Test: roll over", self._test_roll_over)):
             a = QAction(label, self)
             a.triggered.connect(handler)
             menu.addAction(a)
@@ -987,7 +1019,8 @@ class Biscuit(QWidget):
     def _check_pending(self):
         """Consume pending reminder flags when not already running a task."""
         if self.state in (State.FETCHING, State.RETURNING_BALL,
-                          State.STRETCHING, State.DRINKING, State.TASK_RETURN):
+                          State.STRETCHING, State.DRINKING, State.TASK_RETURN,
+                          State.ROLL_OVER):
             return
         if self.stretch_pending:
             self.stretch_pending = False
@@ -1068,6 +1101,27 @@ class Biscuit(QWidget):
     def _update_task_return(self):
         if self._walk_toward(self.bed_cx):
             self.dog_sx = float(self.bed_cx)
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    # ── roll-over command ─────────────────────────────────────────────────────
+
+    def _start_roll_over(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = 75              # ~3.5 s one-shot
+        self.tongue = False
+        self.bounce_val = 0.0
+        self.state = State.ROLL_OVER
+
+    def _update_roll_over(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
             self.state = State.SLEEPING
             self.facing = -1
             self._arm_sleep_timer()
@@ -1154,6 +1208,58 @@ class Biscuit(QWidget):
         p.drawEllipse(bcx + shaft_w // 2 - knob_w // 2, bcy - knob_h // 2,
                       knob_w, knob_h)
 
+    def _draw_rollover(self, p, cx, base, f, BROWN, DARK, BLACK):
+        """ROLL_OVER: brief settle, belly-up with paddling paws, right itself."""
+        prog = self.task_frames / max(1, self.state_frames)
+
+        if prog < 0.16 or prog >= 0.84:
+            # Rolling down / righting itself: the lying pose with a wobble
+            jx = int(math.sin(self.task_frames * 0.8) * 2)
+            self._draw_sleeping(p, cx + jx, base, f, BROWN, DARK, BLACK)
+            return
+
+        # On the back, belly up
+        bw, bh = 60, 20
+        body_top = base - bh
+        p.setPen(Qt.NoPen)
+        p.setBrush(BROWN)
+        p.drawEllipse(cx - bw // 2, body_top, bw, bh)
+        # Belly patch
+        p.setBrush(QColor(222, 168, 110))
+        p.drawEllipse(cx - bw // 2 + 10, body_top + 2, bw - 20, bh - 8)
+
+        # Paws paddling in the air
+        p.setBrush(DARK)
+        for i, lo in enumerate((-18, -7, 7, 18)):
+            paddle = math.sin(self.task_frames * 0.45 + i * 1.4) * 3
+            leg_h = 13 + int(paddle)
+            p.drawRoundedRect(cx + lo - 2, body_top - leg_h, 5, leg_h, 2, 2)
+
+        # Head lolling to the front side, upside-down-ish
+        hr = 12
+        hcx = cx + f * (bw // 2 + 2)
+        hcy = base - 10
+        p.setBrush(BROWN)
+        p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
+        # Flopped ear
+        p.setBrush(DARK)
+        p.drawEllipse(int(hcx - f * 2 - 4), int(hcy - 2), 9, 12)
+        # Closed eye (upside-down arc) + nose low
+        p.setPen(QPen(BLACK, 1.5, Qt.SolidLine, Qt.RoundCap))
+        p.drawArc(int(hcx + f * 3 - 4), int(hcy - 2), 8, 6, 0, 180 * 16)
+        p.setPen(Qt.NoPen)
+        p.setBrush(BLACK)
+        p.drawEllipse(int(hcx + f * 8 - 3), int(hcy + 4), 7, 5)
+
+        # Tail curled at the rear
+        tx = cx - f * (bw // 2 - 2)
+        p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        tp = QPainterPath()
+        tp.moveTo(tx, base - 6)
+        tp.quadTo(tx - f * 10, base - 12, tx - f * 6, base - 18)
+        p.drawPath(tp)
+
     # ── fetch / bowl ──────────────────────────────────────────────────────────
 
     def _throw_ball(self):
@@ -1230,6 +1336,9 @@ class Biscuit(QWidget):
         self.task_frames = 0
         self.state_frames = random.randint(240, 300)
         self.state = State.CHEWING
+
+    def _test_roll_over(self):
+        self._start_roll_over()
 
     def _test_sniff(self):
         self.bubbles.clear()

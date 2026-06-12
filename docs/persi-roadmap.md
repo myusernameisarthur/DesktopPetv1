@@ -117,7 +117,7 @@ route states to them (map in the design map, Part 3). Sniff-walk gets its slow n
 Exit criteria: WALKING, FETCHING/RETURNING, TASK_RETURN, and SNIFF_WALK visibly differ in
 motion, and the HUD shows ANIM changing with them.
 
-### Phase 4 — Input and system enablers + their behaviors
+### Phase 4 — Input and system enablers + their behaviors ⚠️ PARTIAL 2026-06-12: 4a (roll-over gesture) DONE; 4b/4c (keyboard + window hooks) deferred by owner decision — full design in PHASE-4-HOOKS-DESIGN.md
 
 Goal: the plumbing for command gestures, type-along, and window-bark, then the behaviors on top.
 This phase is gated by the risks below; treat each enabler as its own sub-branch.
@@ -238,7 +238,7 @@ Phase 0  done            POC + skill + HUD + git safety
 Phase 1  done            fidgets, the life layer
 Phase 2  done            every behavior toggleable
 Phase 3  done            distinct locomotion
-Phase 4  enablers        gesture / type-along / window-bark (+risks)
+Phase 4  partial         gesture DONE; type-along + window-bark designed, deferred
 Phase 5  new behaviors   beg, greet, zoomies -> FREEZE list
 Phase 6  art             frames, spritesheets, renderer swap
 Phase 7  polish          multi-monitor, DPI, perf, HUD off

@@ -52,7 +52,7 @@ def hud_phase(dog):
         return f"{max(0, min(100, int((1 - sf / 75.0) * 100)))}% done"
     if n == "STRETCHING":
         return f"{int(min(tf, 90) / 90.0 * 100)}% done"
-    if n in ("SCRATCHING", "CHEWING"):
+    if n in ("SCRATCHING", "CHEWING", "ROLL_OVER"):
         return f"{int(min(tf, sf) / sf * 100)}% done" if sf else "..."
     if n == "DRINKING":
         if tp == 0:
@@ -117,11 +117,12 @@ class DebugHUD(QWidget):
         self._x_value = self._x_label + fm_l.horizontalAdvance("M" * 8)
         self._line_h = fm_l.height() + 3
         self._y0 = self._pad + fm_l.ascent()
-        # Widest realistic values: longest state name / longest fidget line.
+        # Widest realistic values: longest state name / fidget / gesture line.
         widest_val = max(fm_v.horizontalAdvance("RETURNING_BALL"),
-                         fm_v.horizontalAdvance("weight-shift 0.5s"))
+                         fm_v.horizontalAdvance("weight-shift 0.5s"),
+                         fm_v.horizontalAdvance("2.9/3 loops 9.9s"))
         w = self._x_value + widest_val + self._pad
-        h = self._y0 + self._line_h * 6 + fm_l.descent() + self._pad
+        h = self._y0 + self._line_h * 7 + fm_l.descent() + self._pad
         self.setFixedSize(w, h)
         # Click-through at the Qt level: the whole window ignores mouse input, so
         # it can never capture a click or interfere with the dog's mask-based
@@ -171,10 +172,18 @@ class DebugHUD(QWidget):
         fa = fidgets.active if fidgets is not None else None
         fidget_val = f"{fa.name} {fa.remaining_s:.1f}s" if fa is not None else "-"
 
+        gesture = getattr(dog, "gesture", None)
+        if gesture is not None and gesture.armed:
+            gesture_val = (f"{gesture.loops:.1f}/3 loops "
+                           f"{gesture.seconds_left:.0f}s")
+        else:
+            gesture_val = "-"
+
         self._lines = [
             ("STATE", dog.state.name),
             ("ANIM", dog.current_anim()),
             ("FIDGET", fidget_val),
+            ("GESTURE", gesture_val),
             ("PHASE", hud_phase(dog)),
             ("FACING", "left" if dog.facing < 0 else "right"),
             ("t/state", f"{secs:4.1f}s"),
