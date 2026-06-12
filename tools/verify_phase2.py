@@ -43,6 +43,7 @@ from biscuit import State, WIN_H
 from settings import Settings, DEFAULTS
 
 dog = biscuit.Biscuit()
+dog._greet_timer.stop()      # keep the launch greet out of this harness
 
 log_lines = []
 _failures = []
@@ -152,7 +153,8 @@ def t_corrupt_file():
 @step(100)
 def t_ambient_all_off():
     reset_dog()
-    for k in ("idle.wander_walk", "idle.scratch", "idle.chew", "idle.sniff_walk"):
+    for k in ("idle.wander_walk", "idle.scratch", "idle.chew",
+              "idle.sniff_walk", "idle.zoomies"):
         dog.settings.set(k, False)
     dog._start_walk()
     check("ambient all off: stays asleep, timer re-armed",
@@ -292,11 +294,13 @@ def t_menu_structure():
     menu = dog._build_menu()
     subs = {a.menu().title(): a.menu() for a in menu.actions()
             if a.menu() is not None}
-    grouped_ok = set(subs) == {"Idle", "Timed", "Interactive", "Command"}
-    counts_ok = (len(subs.get("Idle", QMenu()).actions()) == 6
+    grouped_ok = set(subs) == {"Idle", "Timed", "Interactive", "Command",
+                               "Reactive"}
+    counts_ok = (len(subs.get("Idle", QMenu()).actions()) == 7
                  and len(subs.get("Timed", QMenu()).actions()) == 2
                  and len(subs.get("Interactive", QMenu()).actions()) == 3
-                 and len(subs.get("Command", QMenu()).actions()) == 1)
+                 and len(subs.get("Command", QMenu()).actions()) == 2
+                 and len(subs.get("Reactive", QMenu()).actions()) == 1)
     all_actions = [a for m in subs.values() for a in m.actions()]
     checkable_ok = all(a.isCheckable() for a in all_actions)
     # checked state must mirror the store
@@ -308,7 +312,7 @@ def t_menu_structure():
     mirror_ok = chew_action.isChecked() is False
     dog.settings.set("idle.chew", True)
     test_labels = [a.text() for a in menu.actions() if a.text().startswith("Test:")]
-    test_ok = len(test_labels) == 7
+    test_ok = len(test_labels) == 11
     check("menu: grouped checkable toggles mirror the store + Test intact",
           grouped_ok and counts_ok and checkable_ok and mirror_ok and test_ok,
           f"groups={sorted(subs)} tests={len(test_labels)}")

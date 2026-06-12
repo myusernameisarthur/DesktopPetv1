@@ -33,6 +33,7 @@ from biscuit import State
 from fidgets import LYING_FIDGETS, STANDING_FIDGETS, ActiveFidget
 
 dog = biscuit.Biscuit()
+dog._greet_timer.stop()      # keep the launch greet out of this harness
 
 log_lines = []
 

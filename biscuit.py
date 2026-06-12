@@ -4,6 +4,7 @@ import random
 import ctypes
 import winreg
 import os
+import time
 from ctypes import wintypes
 from enum import Enum
 
@@ -31,6 +32,10 @@ class State(Enum):
     CHEWING = 10        # idle: gnaw a bone
     SNIFF_WALK = 11     # idle: slow walk with nose-down pauses
     ROLL_OVER = 12      # command: circle gesture -> on back, paws up, wriggle
+    BARKING = 13        # reactive: short head-back bark (greet flourish; 4c later)
+    BEG = 14            # command: double-click -> sit up, front paws raised
+    GREETING = 15       # reactive: launch / return from long idle -> hops + wag
+    ZOOMIES = 16        # idle (rare): fast back-and-forth dashes
 
 
 # Single source of truth: the animation each state actually renders.
@@ -51,6 +56,10 @@ ANIMATION = {
     State.CHEWING:        "chew",         # _draw_standing + head-bob + bone
     State.SNIFF_WALK:     "sniff-walk",   # slow nose-down walk, pause-and-go
     State.ROLL_OVER:      "roll-over",    # onto the back, paws paddle, right itself
+    State.BARKING:        "bark",         # head back, mouth open, two quick bobs
+    State.BEG:            "beg-sit-up",   # torso up on haunches, front paws dangle
+    State.GREETING:       "greet-wag",    # little hops + fast wag (+ optional bark)
+    State.ZOOMIES:        "dash",         # flat-out sprint, direction flips
 }
 
 
@@ -74,6 +83,7 @@ GAITS = {
     "plod":       Gait("plod",       0.9, 0.15, 3, 0.0, 3, 6),
     "scamper":    Gait("scamper",    2.6, 0.42, 7, 2.5, 0, 14),
     "sniff-walk": Gait("sniff-walk", 0.75, 0.12, 3, 0.0, 0, 4),
+    "dash":       Gait("dash",       3.4, 0.50, 8, 3.0, 0, 14),
 }
 
 # Which gait each state travels with (None / missing = state doesn't travel).
@@ -84,6 +94,7 @@ STATE_GAIT = {
     State.FETCHING:       "scamper",
     State.SNIFF_WALK:     "sniff-walk",
     State.DRINKING:       "trot-brisk",   # approach phase only
+    State.ZOOMIES:        "dash",
 }
 
 
@@ -198,6 +209,19 @@ class Biscuit(QWidget):
         self.sniff_dest = 0.0
         self.sniff_next_pause = 0.0
 
+        # Zoomies sub-state (task_phase counts dashes, state_frames = total)
+        self.zoom_left = 0.0
+        self.zoom_right = 0.0
+        self.zoom_dest = 0.0
+
+        # Greet: on launch, and on cursor returning after a long idle gap
+        self._greet_bark = False
+        self.greet_idle_s = 600.0        # cursor idle gap that counts as "away"
+        self.greet_cooldown_s = 600.0    # at most one return-greet per this
+        self._last_cursor_pos = None
+        self._last_cursor_move_t = time.monotonic()
+        self._last_greet_t = 0.0
+
         # Idle fidget layer: small motions that never change self.state.
         # The engine picks them; the _draw_* methods read self.fidgets.active
         # and apply small deltas on the base pose.
@@ -248,6 +272,12 @@ class Biscuit(QWidget):
 
         self.show()
         self._assert_topmost()
+
+        # Greet shortly after launch (reactive.greet switch checked at fire time)
+        self._greet_timer = QTimer(self)
+        self._greet_timer.setSingleShot(True)
+        self._greet_timer.timeout.connect(self._launch_greet)
+        self._greet_timer.start(1800)
 
         # === DEBUG HUD (dev tool — delete this block + debug_hud.py to remove) ===
         from debug_hud import DebugHUD
@@ -317,6 +347,17 @@ class Biscuit(QWidget):
         self.walk_phase += g.phase_rate if g is not None else 0.25
 
         cp = QCursor.pos()
+
+        # Greet on return: cursor moves again after a long still gap.
+        # (Polls the same cursor position as everything else — no hooks.)
+        if self._last_cursor_pos is None or cp != self._last_cursor_pos:
+            now = time.monotonic()
+            gap = now - self._last_cursor_move_t
+            self._last_cursor_move_t = now
+            self._last_cursor_pos = cp
+            if (gap > self.greet_idle_s
+                    and now - self._last_greet_t > self.greet_cooldown_s):
+                self._maybe_greet()
 
         # Roll-over circle gesture (armed by a dog click; pure cursor math)
         dog_center_y = self.tb_top - 30
@@ -455,6 +496,14 @@ class Biscuit(QWidget):
             self._update_sniff_walk()
         elif self.state == State.ROLL_OVER:
             self._update_roll_over()
+        elif self.state == State.BARKING:
+            self._update_barking()
+        elif self.state == State.BEG:
+            self._update_beg()
+        elif self.state == State.GREETING:
+            self._update_greeting()
+        elif self.state == State.ZOOMIES:
+            self._update_zoomies()
 
     def _arm_sleep_timer(self):
         """Schedule the next walk after 4–8 minutes of sleep."""
@@ -477,21 +526,26 @@ class Biscuit(QWidget):
             self.bubbles.clear()
             return
 
-        # Equal chance among the ambient behaviors that are switched on
-        choices = [b for b, key in (('walk', 'idle.wander_walk'),
-                                    ('scratch', 'idle.scratch'),
-                                    ('chew', 'idle.chew'),
-                                    ('sniff', 'idle.sniff_walk'))
-                   if self.settings.get(key)]
-        if not choices:
+        # Weighted pick among the ambient behaviors that are switched on
+        # (zoomies is deliberately rare)
+        pool = [(b, w) for b, key, w in (('walk', 'idle.wander_walk', 3),
+                                         ('scratch', 'idle.scratch', 3),
+                                         ('chew', 'idle.chew', 3),
+                                         ('sniff', 'idle.sniff_walk', 3),
+                                         ('zoomies', 'idle.zoomies', 1))
+                if self.settings.get(key)]
+        if not pool:
             self._arm_sleep_timer()     # everything off: keep sleeping
             return
-        behavior = random.choice(choices)
+        behavior = random.choices([b for b, _ in pool],
+                                  weights=[w for _, w in pool])[0]
         self.bubbles.clear()
         self.task_phase = 0
         self.task_frames = 0
 
-        if behavior == 'scratch':
+        if behavior == 'zoomies':
+            self._start_zoomies()
+        elif behavior == 'scratch':
             self.state = State.SCRATCHING
             self.state_frames = random.randint(90, 120)   # 3–4 s
         elif behavior == 'chew':
@@ -533,7 +587,8 @@ class Biscuit(QWidget):
         PINK  = QColor(230, 88, 88)
         ZZZ   = QColor(130, 148, 228)
 
-        excited  = self.state == State.EXCITED
+        # GREETING borrows the excited flair: fast wag, tongue, bounce
+        excited  = self.state in (State.EXCITED, State.GREETING)
         alert    = self.state == State.ALERT
 
         # Corner home objects drawn first
@@ -544,6 +599,18 @@ class Biscuit(QWidget):
         # Dog visual
         if self.state == State.ROLL_OVER:
             self._draw_rollover(p, cx, base, f, BROWN, DARK, BLACK)
+
+        elif self.state == State.BEG:
+            self._draw_beg(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK)
+
+        elif self.state == State.BARKING:
+            bob = max(0.0, math.sin(self.task_frames * 0.5))
+            head_up = int(bob * 6)
+            bcx = cx - f * (head_up // 3)        # tiny recoil on each bob
+            self._draw_standing(p, bcx, base, f, BROWN, DARK, BLACK, WHITE,
+                                PINK, False, False, False, head_bob=-head_up)
+            if bob > 0.35:
+                self._draw_bark_mouth(p, bcx, base, f, -head_up)
 
         elif self.state in (State.SLEEPING, State.STRETCHING):
             if fa is not None and fa.name == "scratch":
@@ -907,6 +974,19 @@ class Biscuit(QWidget):
         elif event.button() == Qt.RightButton:
             self._show_menu(event.globalPos())
 
+    def mouseDoubleClickEvent(self, event):
+        if event.button() != Qt.LeftButton:
+            return
+        lx = event.pos().x()
+        ly = event.pos().y()
+        # Leave the ball and bowl to the single-click handlers
+        if abs(lx - self.ball_cx) < 12 and ly > WIN_H - 20:
+            return
+        if abs(lx - self.bowl_cx) < 13 and ly > WIN_H - 14:
+            return
+        if not self.paused and self.settings.get("command.beg"):
+            self._start_beg()
+
     def _add_toggle(self, menu, label, key):
         """Checkable menu action wired to a persisted behavior switch."""
         a = QAction(label, self)
@@ -941,6 +1021,7 @@ class Biscuit(QWidget):
         self._add_toggle(m_idle, "Scratch", "idle.scratch")
         self._add_toggle(m_idle, "Chew bone", "idle.chew")
         self._add_toggle(m_idle, "Sniff walk", "idle.sniff_walk")
+        self._add_toggle(m_idle, "Zoomies (rare)", "idle.zoomies")
 
         m_timed = menu.addMenu("Timed")
         self._add_toggle(m_timed, "Stretch reminders", "timed.stretch_reminders")
@@ -954,6 +1035,11 @@ class Biscuit(QWidget):
         m_cmd = menu.addMenu("Command")
         self._add_toggle(m_cmd, "Roll over (click, then circle the dog 3x)",
                          "command.roll_over")
+        self._add_toggle(m_cmd, "Beg (double-click the dog)", "command.beg")
+
+        m_react = menu.addMenu("Reactive")
+        self._add_toggle(m_react, "Greet on launch / your return",
+                         "reactive.greet")
 
         menu.addSeparator()
         menu.addSection("Test")
@@ -963,7 +1049,11 @@ class Biscuit(QWidget):
                                ("Test: scratch", self._test_scratch),
                                ("Test: chew bone", self._test_chew),
                                ("Test: sniff walk", self._test_sniff),
-                               ("Test: roll over", self._test_roll_over)):
+                               ("Test: roll over", self._test_roll_over),
+                               ("Test: bark", self._test_bark),
+                               ("Test: beg", self._test_beg),
+                               ("Test: greet", self._test_greet),
+                               ("Test: zoomies", self._test_zoomies)):
             a = QAction(label, self)
             a.triggered.connect(handler)
             menu.addAction(a)
@@ -1020,7 +1110,8 @@ class Biscuit(QWidget):
         """Consume pending reminder flags when not already running a task."""
         if self.state in (State.FETCHING, State.RETURNING_BALL,
                           State.STRETCHING, State.DRINKING, State.TASK_RETURN,
-                          State.ROLL_OVER):
+                          State.ROLL_OVER, State.BARKING, State.BEG,
+                          State.GREETING):
             return
         if self.stretch_pending:
             self.stretch_pending = False
@@ -1125,6 +1216,105 @@ class Biscuit(QWidget):
             self.state = State.SLEEPING
             self.facing = -1
             self._arm_sleep_timer()
+
+    # ── bark / beg / greet / zoomies ──────────────────────────────────────────
+
+    def _start_bark(self):
+        """Short head-back bark. Fired by greet today; the Phase 4c window
+        detector will call this too (see docs/PHASE-4-HOOKS-DESIGN.md)."""
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = 26              # ~1.2 s, two bobs
+        self.state = State.BARKING
+
+    def _update_barking(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    def _start_beg(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = 50              # ~2.4 s sit-up
+        self.tongue = False
+        self.bounce_val = 0.0
+        self.state = State.BEG
+
+    def _update_beg(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+
+    def _launch_greet(self):
+        self._maybe_greet()
+
+    def _maybe_greet(self):
+        """Greet if switched on and the dog is just resting."""
+        if self.paused or not self.settings.get("reactive.greet"):
+            return
+        if self.state not in (State.SLEEPING, State.ALERT):
+            return
+        self._last_greet_t = time.monotonic()
+        self._start_greet()
+
+    def _start_greet(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = 55              # ~2.6 s of hops + wag
+        self._greet_bark = random.random() < 0.5
+        self.state = State.GREETING
+
+    def _update_greeting(self):
+        self.task_frames += 1
+        self.bounce_val = abs(math.sin(self.task_frames * 0.35)) * 5
+        if self.task_frames >= self.state_frames:
+            self.bounce_val = 0.0
+            self.task_frames = 0
+            if self._greet_bark:
+                self._greet_bark = False
+                self._start_bark()          # finish the hello with a bark
+            else:
+                self.state = State.SLEEPING
+                self.facing = -1
+                self._arm_sleep_timer()
+
+    def _start_zoomies(self):
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0                 # dashes completed
+        self.task_frames = 0
+        self.state_frames = random.randint(3, 5)   # total dashes
+        self.zoom_left = max(self.walk_min, self.bed_cx - 450)
+        self.zoom_right = self.bed_cx - 80
+        self.zoom_dest = self.zoom_left
+        self.state = State.ZOOMIES
+
+    def _update_zoomies(self):
+        if self._walk_toward(self.zoom_dest):
+            self.task_phase += 1
+            if self.task_phase >= self.state_frames:
+                self.task_phase = 0
+                self.state = State.TASK_RETURN      # plod home, spent
+                return
+            self.zoom_dest = (self.zoom_right
+                              if abs(self.zoom_dest - self.zoom_left) < 1.0
+                              else self.zoom_left)
 
     # ── idle behaviour updates ────────────────────────────────────────────────
 
@@ -1260,6 +1450,90 @@ class Biscuit(QWidget):
         tp.quadTo(tx - f * 10, base - 12, tx - f * 6, base - 18)
         p.drawPath(tp)
 
+    def _draw_bark_mouth(self, p, cx, base, f, head_bob):
+        """Open mouth for the bark, at the standing pose's muzzle position."""
+        bw = 52; bh = 17; leg_len = 17
+        body_bottom = base - leg_len
+        body_top = body_bottom - bh
+        hcx = cx + f * (bw // 2 - 2)
+        hcy = body_top - 4 + head_bob
+        p.setPen(Qt.NoPen)
+        p.setBrush(QColor(55, 28, 18))
+        p.drawEllipse(int(hcx + f * 7 - 3), int(hcy + 6), 7, 6)
+
+    def _draw_beg(self, p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK):
+        """BEG: rear stays planted, torso tilts up, front paws dangle."""
+        prog = self.task_frames / max(1, self.state_frames)
+        if prog < 0.2:
+            lift = prog / 0.2
+        elif prog > 0.85:
+            lift = (1.0 - prog) / 0.15
+        else:
+            lift = 1.0
+
+        bw, bh, leg_len = 52, 17, 17
+        body_bottom = base - leg_len + int(lift * 6)   # haunches sink a little
+        body_top = body_bottom - bh
+
+        # Rear legs planted on the ground, folding shorter as the rear sinks
+        p.setPen(Qt.NoPen)
+        p.setBrush(DARK)
+        rear = (-18, -6) if f > 0 else (8, 20)
+        for lx in rear:
+            p.drawRoundedRect(int(cx + lx - 2), body_bottom - 1, 5,
+                              int(base - body_bottom + 1), 2, 2)
+
+        # Body tilts up around the rear hip
+        th = math.radians(lift * 38)
+        pivot_x = cx - f * (bw // 2 - 8)
+        p.setBrush(BROWN)
+        p.save()
+        p.translate(pivot_x, body_bottom)
+        p.rotate(-f * lift * 38)
+        p.translate(-pivot_x, -body_bottom)
+        p.drawEllipse(cx - bw // 2, body_top, bw, bh)
+        p.restore()
+
+        # Head rides the raised front end of the body
+        hr = 13
+        reach = bw - 10
+        hcx = pivot_x + f * reach * math.cos(th)
+        hcy = body_bottom - reach * math.sin(th) - 10
+        p.setBrush(BROWN)
+        p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
+        p.setBrush(DARK)
+        p.drawEllipse(int(hcx - f * 2 - 5), int(hcy - hr - 2), 9, 14)
+        p.setBrush(BLACK)
+        p.drawEllipse(int(hcx + f * 4 - 3), int(hcy - 7), 6, 6)
+        p.setBrush(WHITE)
+        p.drawEllipse(int(hcx + f * 4 - 1), int(hcy - 6), 2, 2)
+        p.setBrush(BLACK)
+        p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 1), 7, 5)
+        if lift > 0.8:
+            p.setBrush(PINK)
+            p.drawEllipse(int(hcx + f * 8 - 3), int(hcy + 7), 6, 7)
+
+        # Front paws dangling below the chest, with a tiny paddle
+        paddle = math.sin(self.task_frames * 0.3) * 1.5 * lift
+        p.setBrush(DARK)
+        chest_x = pivot_x + f * (reach - 16) * math.cos(th)
+        chest_y = body_bottom - (reach - 16) * math.sin(th)
+        p.drawRoundedRect(int(chest_x - f * 1 - 2), int(chest_y + paddle),
+                          5, 11, 2, 2)
+        p.drawRoundedRect(int(chest_x + f * 7 - 2), int(chest_y - paddle),
+                          5, 11, 2, 2)
+
+        # Tail resting on the ground behind, slow sweep
+        sweep = math.sin(self.tail_phase * 0.6) * 4
+        tx = pivot_x - f * 4
+        p.setPen(QPen(DARK, 3, Qt.SolidLine, Qt.RoundCap, Qt.RoundJoin))
+        p.setBrush(Qt.NoBrush)
+        tp = QPainterPath()
+        tp.moveTo(tx, body_bottom + 6)
+        tp.quadTo(tx - f * 10, body_bottom + 2 - sweep, tx - f * 16,
+                  body_bottom + 4 - sweep)
+        p.drawPath(tp)
+
     # ── fetch / bowl ──────────────────────────────────────────────────────────
 
     def _throw_ball(self):
@@ -1339,6 +1613,18 @@ class Biscuit(QWidget):
 
     def _test_roll_over(self):
         self._start_roll_over()
+
+    def _test_bark(self):
+        self._start_bark()
+
+    def _test_beg(self):
+        self._start_beg()
+
+    def _test_greet(self):
+        self._start_greet()
+
+    def _test_zoomies(self):
+        self._start_zoomies()
 
     def _test_sniff(self):
         self.bubbles.clear()

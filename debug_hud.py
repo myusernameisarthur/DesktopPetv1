@@ -52,8 +52,11 @@ def hud_phase(dog):
         return f"{max(0, min(100, int((1 - sf / 75.0) * 100)))}% done"
     if n == "STRETCHING":
         return f"{int(min(tf, 90) / 90.0 * 100)}% done"
-    if n in ("SCRATCHING", "CHEWING", "ROLL_OVER"):
+    if n in ("SCRATCHING", "CHEWING", "ROLL_OVER", "BARKING", "BEG",
+             "GREETING"):
         return f"{int(min(tf, sf) / sf * 100)}% done" if sf else "..."
+    if n == "ZOOMIES":
+        return f"dash {min(tp + 1, sf)}/{sf}"
     if n == "DRINKING":
         if tp == 0:
             return f"approach {_cycle_pct(dog.walk_phase)}%"

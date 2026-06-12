@@ -149,7 +149,7 @@ toggles and shown on the HUD.
 Exit criteria: each fires reliably from its real trigger, each has a working on/off switch, and
 type-along and window-bark are documented as activity-only / filtered.
 
-### Phase 5 — Remaining new behaviors
+### Phase 5 — Remaining new behaviors ✅ DONE 2026-06-12 — behavior list FROZEN (see PHASE-5-REPORT.md + ANIMATION-INVENTORY.md)
 
 Goal: round out character once the foundation reads as alive. From the catalog: beg, greet on
 launch / return from long idle, zoomies (rare), and any others you want promoted from the design
@@ -239,7 +239,7 @@ Phase 1  done            fidgets, the life layer
 Phase 2  done            every behavior toggleable
 Phase 3  done            distinct locomotion
 Phase 4  partial         gesture DONE; type-along + window-bark designed, deferred
-Phase 5  new behaviors   beg, greet, zoomies -> FREEZE list
+Phase 5  done            beg, greet, zoomies, bark -> list FROZEN
 Phase 6  art             frames, spritesheets, renderer swap
 Phase 7  polish          multi-monitor, DPI, perf, HUD off
 Phase 8  ship            sign, install, startup, update

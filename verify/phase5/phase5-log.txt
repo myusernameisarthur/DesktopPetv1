@@ -1,0 +1,18 @@
+PASS  Test: bark fires BARKING
+PASS  bark settles back to SLEEPING  [state=SLEEPING]
+PASS  double-click on dog fires BEG
+PASS  beg settles back to SLEEPING  [state=SLEEPING]
+PASS  beg honors its switch; Test bypasses
+PASS  reminder can't interrupt BEG (stays pending)
+PASS  launch path fires GREETING
+PASS  greet chains into BARKING when flagged  [state=BARKING]
+PASS  greet+bark settles back to SLEEPING  [state=SLEEPING]
+PASS  greet honors its switch
+PASS  cursor return after idle gap fires GREETING  [state=GREETING]
+PASS  return-greet rate-limited by cooldown  [state=SLEEPING]
+PASS  Test: zoomies fires ZOOMIES
+PASS  zoomies dashes at the dash gait speed  [3.40px/tick (expect 3.4)]
+PASS  zoomies hands off to TASK_RETURN (plod home)  [state=TASK_RETURN]
+PASS  ambient picker reaches zoomies (only switch on)  [state=ZOOMIES]
+
+ALL CHECKS PASSED

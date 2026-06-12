@@ -12,6 +12,6 @@ PASS  ball-fetch honors its switch
 PASS  fidgets (lying) off: none fire in 4s at 30x rate
 PASS  fidgets (lying) on: they fire again
 PASS  Test menu force-fires with switch off  [state=SCRATCHING]
-PASS  menu: grouped checkable toggles mirror the store + Test intact  [groups=['Idle', 'Interactive', 'Timed'] tests=6]
+PASS  menu: grouped checkable toggles mirror the store + Test intact  [groups=['Command', 'Idle', 'Interactive', 'Reactive', 'Timed'] tests=11]
 
 ALL CHECKS PASSED

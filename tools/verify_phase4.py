@@ -110,6 +110,7 @@ import biscuit
 from biscuit import State, WIN_H
 
 dog = biscuit.Biscuit()
+dog._greet_timer.stop()      # keep the launch greet out of this harness
 
 
 def shot(name):

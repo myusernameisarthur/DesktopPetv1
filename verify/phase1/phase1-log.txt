@@ -40,13 +40,13 @@ state=ALERT (expect ALERT)
 click-through: on-dog-hits-overlay=True empty-strip-passes-through=True hud-passes-through=True
 soak: lying, 45s at rate_mult=6
 soak: standing (ALERT), 30s
-soak events: lying=15 standing=11
-  lying sequence: ear-swivel ear-flick eye-crack tail-twitch nose-twitch dream-kick scratch ear-flick sigh tail-twitch nose-twitch ear-flick eye-crack nose-twitch resettle
-  lying: distinct=9
-  lying gaps(s): [4.34, 1.72, 3.42, 1.8, 2.03, 2.27, 3.38, 2.33, 4.08, 1.72, 4.02, 5.33, 3.62, 1.69]
-  standing sequence: blink head-tilt look-around ear-swivel wag-burst blink bone-chew ear-swivel blink weight-shift head-tilt
-  standing: distinct=7
-  standing gaps(s): [1.48, 1.95, 2.78, 4.53, 2.8, 1.16, 716.59, 2.58, 1.64, 2.36]
-idle CPU over 10.0s: 3.8% of one core
+soak events: lying=16 standing=9
+  lying sequence: weight-shift look-around nose-twitch ear-flick eye-crack dream-kick scratch nose-twitch tail-twitch ear-flick sigh nose-twitch tail-twitch eye-crack ear-flick resettle
+  lying: distinct=10
+  lying gaps(s): [1.81, 1.62, 1.39, 2.53, 3.12, 3.44, 4.48, 2.02, 3.12, 2.98, 4.52, 2.89, 3.19, 3.17, 2.48]
+  standing sequence: head-tilt bone-chew dream-kick sigh nose-twitch ear-flick tail-twitch eye-crack resettle
+  standing: distinct=9
+  standing gaps(s): [2.36, 6.7, 3.73, 3.95, 1.59, 2.25, 1.88, 2.14]
+idle CPU over 10.0s: 4.8% of one core
 
 ALL CHECKS PASSED

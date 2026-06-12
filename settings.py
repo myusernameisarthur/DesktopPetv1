@@ -20,6 +20,7 @@ DEFAULTS = {
     "idle.scratch": True,
     "idle.chew": True,
     "idle.sniff_walk": True,
+    "idle.zoomies": True,
     # Timed (clock)
     "timed.stretch_reminders": True,
     "timed.water_reminders": True,
@@ -29,6 +30,9 @@ DEFAULTS = {
     "interactive.fetch_ball": True,
     # Command (deliberate gesture)
     "command.roll_over": True,
+    "command.beg": True,
+    # Reactive (system events)
+    "reactive.greet": True,
     # Debug (dev tooling; default flips off in Phase 7)
     "debug.hud": True,
 }
