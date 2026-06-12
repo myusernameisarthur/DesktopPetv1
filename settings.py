@@ -33,6 +33,8 @@ DEFAULTS = {
     "command.beg": True,
     # Reactive (system events)
     "reactive.greet": True,
+    # Art (Phase 6: sprite renderer; off = procedural drawing)
+    "art.sprites": True,
     # Debug (dev tooling; default flips off in Phase 7)
     "debug.hud": True,
 }

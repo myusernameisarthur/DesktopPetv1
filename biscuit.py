@@ -17,6 +17,11 @@ from fidgets import FidgetEngine, POSE_LYING, POSE_STANDING
 from gestures import CircleGestureRecognizer
 from settings import Settings
 
+try:
+    from sprites import SpriteSet
+except Exception:           # missing module/assets must never kill the app
+    SpriteSet = None
+
 
 class State(Enum):
     SLEEPING = 0
@@ -235,6 +240,16 @@ class Biscuit(QWidget):
         # Behaviors read their switch when they would fire; the Test menu
         # bypasses the switches by setting states directly.
         self.settings = Settings()
+
+        # Phase 6 sprite renderer (assets/manifest.json). None -> procedural.
+        # Per-state fallback also happens inside _sprite_draw, so partial
+        # asset sets are fine while art is iterated.
+        self.sprites = None
+        if SpriteSet is not None:
+            try:
+                self.sprites = SpriteSet()
+            except Exception:
+                self.sprites = None
 
         # Reminder pending flags
         self.stretch_pending = False
@@ -596,6 +611,13 @@ class Biscuit(QWidget):
 
         fa = self.fidgets.active   # idle fidget delta (None outside SLEEPING/ALERT)
 
+        # Phase 6 sprite renderer: if a clip covers the current state/fidget,
+        # draw it and skip the procedural dog. Bubbles still drawn (procedural
+        # zzz per the inventory). Falls through per-state when a clip is missing.
+        if self._sprite_draw(p, cx, base, f, fa):
+            self._draw_bubbles(p, ZZZ)
+            return
+
         # Dog visual
         if self.state == State.ROLL_OVER:
             self._draw_rollover(p, cx, base, f, BROWN, DARK, BLACK)
@@ -678,6 +700,9 @@ class Biscuit(QWidget):
             p.setBrush(QColor(215, 70, 45))
             p.drawEllipse(bx - r, by, r * 2, r * 2)
 
+        self._draw_bubbles(p, ZZZ)
+
+    def _draw_bubbles(self, p, ZZZ):
         for b in self.bubbles:
             alpha = max(0, min(255, int(b.alpha)))
             p.save()
@@ -687,7 +712,56 @@ class Biscuit(QWidget):
             p.drawText(int(b.x), int(b.y), "z")
             p.restore()
 
+    def _sprite_draw(self, p, cx, base, f, fa):
+        """Phase 6: draw the dog from sprite clips. Returns True if drawn.
+
+        Clip choice mirrors the procedural dispatch: an active idle fidget
+        replaces the base clip while it plays; travelling states use their
+        gait clip; everything else uses ANIMATION[state]. Loops index on the
+        global tick counter, one-shots on task_frames (ticks since the
+        behavior started).
+        """
+        s = self.sprites
+        if s is None or not self.settings.get("art.sprites"):
+            return False
+
+        if fa is not None and self.state in (State.SLEEPING, State.ALERT):
+            pm = s.fidget_pixmap(fa.name, fa.progress, f)
+            if pm is not None:
+                s.draw_dog(p, pm, cx, base)
+                return True
+
+        g = self._active_gait()
+        name = g.name if g is not None else ANIMATION.get(self.state)
+        if name is None or not s.has(name):
+            return False
+        tick = self._ticks if s.clips[name].loop else self.task_frames
+        pm = s.get(name, tick, f)
+        if pm is None:
+            return False
+        s.draw_dog(p, pm, cx, base)
+        return True
+
     def _draw_corner(self, p):
+        # Phase 6 sprite props (bed, bowl, ball); procedural fallback below.
+        if self.sprites is not None and self.settings.get("art.sprites"):
+            ground = WIN_H
+            bed = self.sprites.prop("bed")
+            bowl = self.sprites.prop("bowl-full" if self.bowl_full
+                                     else "bowl-empty")
+            if bed is not None and bowl is not None:
+                p.drawPixmap(self.bed_cx - bed.width() // 2,
+                             ground - bed.height(), bed)
+                p.drawPixmap(self.bowl_cx - bowl.width() // 2,
+                             ground - bowl.height(), bowl)
+                ball = self.sprites.prop("ball")
+                if self.ball_visible and ball is not None:
+                    p.drawPixmap(int(self.ball_x) - ball.width() // 2,
+                                 ground - ball.height(), ball)
+                return
+        self._draw_corner_procedural(p)
+
+    def _draw_corner_procedural(self, p):
         BED_FILL   = QColor(250, 250, 250)   # white so dog is visible on it
         BED_RIM    = QColor(185, 185, 185)
         BOWL_FULL  = QColor(148, 198, 222)
@@ -1010,6 +1084,9 @@ class Biscuit(QWidget):
         a_start.setChecked(self.startup_enabled)
         a_start.triggered.connect(self._handle_startup)
         menu.addAction(a_start)
+
+        if self.sprites is not None:
+            self._add_toggle(menu, "Pixel-art sprites", "art.sprites")
 
         menu.addSeparator()
         menu.addSection("Behaviors")

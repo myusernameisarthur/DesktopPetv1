@@ -1,0 +1,711 @@
+{
+ "frame_size": 128,
+ "baseline": 116,
+ "tick_ms": 33,
+ "clips": {
+  "breathing": {
+   "dir": "frames/breathing",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    21,
+    5,
+    17,
+    17,
+    5,
+    21
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "alert-stand": {
+   "dir": "frames/alert-stand",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png"
+   ],
+   "ticks": [
+    13,
+    13,
+    13,
+    13
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "bounce": {
+   "dir": "frames/bounce",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "greet-wag": {
+   "dir": "frames/greet-wag",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    13,
+    13,
+    13,
+    13,
+    13,
+    13
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "trot-brisk": {
+   "dir": "frames/trot-brisk",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "plod": {
+   "dir": "frames/plod",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "plod-carry": {
+   "dir": "frames/plod-carry",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5,
+    5
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "scamper": {
+   "dir": "frames/scamper",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "sniff-walk": {
+   "dir": "frames/sniff-walk",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png",
+    "08.png",
+    "09.png"
+   ],
+   "ticks": [
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    3,
+    8,
+    8
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "dash": {
+   "dir": "frames/dash",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": true,
+   "facing": "right"
+  },
+  "stretch": {
+   "dir": "frames/stretch",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png",
+    "08.png",
+    "09.png"
+   ],
+   "ticks": [
+    7,
+    7,
+    9,
+    13,
+    13,
+    9,
+    8,
+    7,
+    7,
+    8
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "drink": {
+   "dir": "frames/drink",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    4,
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "scratch": {
+   "dir": "frames/scratch",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "chew": {
+   "dir": "frames/chew",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    4,
+    4,
+    4,
+    4,
+    4,
+    4
+   ],
+   "loop": true,
+   "facing": "left"
+  },
+  "roll-over": {
+   "dir": "frames/roll-over",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png",
+    "08.png",
+    "09.png",
+    "10.png",
+    "11.png"
+   ],
+   "ticks": [
+    6,
+    8,
+    8,
+    7,
+    7,
+    7,
+    7,
+    7,
+    8,
+    8,
+    6,
+    6
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "bark": {
+   "dir": "frames/bark",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png"
+   ],
+   "ticks": [
+    4,
+    4,
+    6,
+    5,
+    5
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "beg-sit-up": {
+   "dir": "frames/beg-sit-up",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    8,
+    8,
+    8,
+    8,
+    5,
+    5
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "ear-flick": {
+   "dir": "frames/ear-flick",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "nose-twitch": {
+   "dir": "frames/nose-twitch",
+   "frames": [
+    "00.png",
+    "01.png"
+   ],
+   "ticks": [
+    2,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "tail-twitch": {
+   "dir": "frames/tail-twitch",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png"
+   ],
+   "ticks": [
+    2,
+    3,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "sigh": {
+   "dir": "frames/sigh",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    7,
+    7,
+    15,
+    15,
+    7,
+    7
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "dream-kick": {
+   "dir": "frames/dream-kick",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png"
+   ],
+   "ticks": [
+    3,
+    3,
+    3,
+    3
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "eye-crack": {
+   "dir": "frames/eye-crack",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png"
+   ],
+   "ticks": [
+    6,
+    15,
+    6
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "resettle": {
+   "dir": "frames/resettle",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    8,
+    6,
+    5,
+    5
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "scratch-lite": {
+   "dir": "frames/scratch-lite",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "blink": {
+   "dir": "frames/blink",
+   "frames": [
+    "00.png",
+    "01.png"
+   ],
+   "ticks": [
+    3,
+    3
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "ear-swivel": {
+   "dir": "frames/ear-swivel",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png"
+   ],
+   "ticks": [
+    3,
+    4,
+    3
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "weight-shift": {
+   "dir": "frames/weight-shift",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png"
+   ],
+   "ticks": [
+    8,
+    8,
+    6
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "head-tilt": {
+   "dir": "frames/head-tilt",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png"
+   ],
+   "ticks": [
+    4,
+    13,
+    13,
+    4
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "look-around": {
+   "dir": "frames/look-around",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png"
+   ],
+   "ticks": [
+    4,
+    9,
+    9,
+    9,
+    4
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "wag-burst": {
+   "dir": "frames/wag-burst",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "shake-off": {
+   "dir": "frames/shake-off",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    2,
+    2,
+    2,
+    2,
+    2,
+    2
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "sit": {
+   "dir": "frames/sit",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    21,
+    21,
+    5,
+    5
+   ],
+   "loop": false,
+   "facing": "left"
+  },
+  "bone-chew": {
+   "dir": "frames/bone-chew",
+   "frames": [
+    "00.png",
+    "01.png",
+    "02.png",
+    "03.png",
+    "04.png",
+    "05.png",
+    "06.png",
+    "07.png"
+   ],
+   "ticks": [
+    5,
+    5,
+    4,
+    4,
+    4,
+    4,
+    5,
+    5
+   ],
+   "loop": false,
+   "facing": "left"
+  }
+ },
+ "props": {
+  "ball": "prop-ball.png",
+  "bone": "prop-bone.png",
+  "bed": "prop-bed.png",
+  "bowl-full": "prop-bowl-full.png",
+  "bowl-empty": "prop-bowl-empty.png",
+  "zzz": "prop-zzz.png"
+ }
+}

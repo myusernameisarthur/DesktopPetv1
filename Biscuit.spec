@@ -5,7 +5,7 @@ a = Analysis(
     ['biscuit.py'],
     pathex=[],
     binaries=[],
-    datas=[],
+    datas=[('assets', 'assets')],   # Phase 6 sprite frames + manifest
     hiddenimports=[],
     hookspath=[],
     hooksconfig={},
