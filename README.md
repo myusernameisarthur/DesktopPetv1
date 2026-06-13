@@ -2,7 +2,7 @@
 
 > A transparent, always-on-top Windows desktop pet — an animated sausage dog who lives on your taskbar.
 
-Biscuit sits in the bottom-right corner of your screen, just above the clock. He sleeps, breathes, yawns, goes for sniff walks, scratches his ear, chews bones, fetches the ball when you throw it, and gently reminds you to stretch and drink water. He is drawn entirely with Qt's `QPainter` — no sprites yet, just geometry. The plan is to eventually replace the placeholder art with real illustrations.
+Biscuit (a.k.a. **Persi**) sits in the bottom-right corner of your screen, just above the clock. He sleeps, breathes, yawns, goes for sniff walks, scratches his ear, chews bones, fetches the ball when you throw it, begs, does zoomies, climbs up onto the taskbar when you launch him, and gently reminds you to stretch and drink water. He now renders from **real pixel-art sprites** (34 animation clips), with the original `QPainter` geometry kept as a switchable "Classic shapes" renderer. You can also resize him from 75% to 200%.
 
 ---
 
@@ -35,7 +35,12 @@ A small sausage dog shape (elongated oval body, round head, floppy ear, four rou
 | **Stretch reminder** | Every 30 min: dog stretches body and yawns |
 | **Water reminder** | Every 60 min: dog walks to bowl, drinks, bowl empties |
 | Bowl refill | Click bowl to refill (grey → blue) |
-| Right-click menu | Pause, startup, reminder toggles, full test suite |
+| **Pixel-art sprites** | 34 animation clips drive every state; switchable to the original "Classic shapes" geometry in the Art menu |
+| **Size toggle** | Art menu: 75% / 100% / 125% / 150% / 200%, persisted |
+| **Climb on launch** | Hauls himself up from behind the taskbar when the app starts, then greets |
+| **Beg / greet / zoomies** | Double-click to beg; greets on launch and your return; rare zoomie dashes |
+| Right-click menu | Pause, startup, art renderer + size, grouped behavior toggles, full test suite |
+| Settings persistence | Every toggle + art choices saved to `%APPDATA%\Persi\settings.json` |
 | Test triggers | All behaviors triggerable immediately from the menu |
 
 ---
@@ -53,8 +58,8 @@ Python 3.11+, Windows only.
 
 ```bash
 pip install pyinstaller
-python -m PyInstaller --onefile --windowed --name Biscuit biscuit.py
-# → dist/Biscuit.exe
+python -m PyInstaller Biscuit.spec
+# → dist/Biscuit.exe  (the spec bundles assets/ — don't use the bare --onefile form, it omits the sprites)
 ```
 
 ---
@@ -72,11 +77,19 @@ See [HANDOFF.md](HANDOFF.md) for a complete technical briefing for anyone contin
 ## File structure
 
 ```
-biscuit.py     — entire application (~900 lines, single file)
-Biscuit.spec   — PyInstaller build spec
-README.md      — this file
-DEVLOG.md      — full development log with decisions and reasoning
-HANDOFF.md     — technical briefing for new contributors / AI instances
+biscuit.py     — app + state machine + renderers (~1800 lines)
+fidgets.py     — idle micro-behavior (fidget) engine
+gestures.py    — roll-over circle-gesture recognizer
+settings.py    — persisted toggles + art kit/scale (%APPDATA%\Persi)
+sprites.py     — manifest-driven sprite renderer + kit discovery
+debug_hud.py   — developer state HUD (toggle in the menu)
+assets/        — sprite frames, props, palette, generated manifest.json
+tools/art/     — art pipeline: pack.py (manifest gen), artlib.py, batch0.py
+tools/         — verify_phase*.py, smoke_phase6.py
+docs/          — roadmap, phase reports, animation inventory
+OUTPUTS/persi-art/ — art work queue (NEXT-STEPS, OPEN-ITEMS, previews)
+Biscuit.spec   — PyInstaller build spec (bundles assets/)
+README.md / DEVLOG.md / HANDOFF.md — overview / history / technical briefing
 .gitignore     — excludes build artifacts
 ```
 
@@ -84,10 +97,15 @@ HANDOFF.md     — technical briefing for new contributors / AI instances
 
 ## Roadmap
 
-- [ ] Real sprite art (replace QPainter placeholder geometry)
+See `docs/persi-roadmap.md` for the full phased plan. Status in brief:
+
+- [x] Idle micro-behaviors / fidgets (Phase 1)
+- [x] Settings persistence — every behavior toggleable (Phase 2)
+- [x] Distinct gaits (Phase 3)
+- [x] Roll-over command gesture (Phase 4a; type-along + window-bark designed, deferred)
+- [x] Beg, greet, zoomies — behavior list frozen (Phase 5)
+- [x] Real sprite art in-app + size/kit toggles + startup climb (Phase 6 code)
+- [ ] Regenerate the 19 placeholder clips + the `climb-up` clip (Phase 6 art gate)
+- [ ] Multi-monitor / DPI correctness, perf pass, HUD off by default (Phase 7)
+- [ ] Code-sign, installer, auto-start, updates (Phase 8)
 - [ ] Optional sound effects (off by default)
-- [ ] Dream twitching while asleep
-- [ ] Chasing tail idle behavior  
-- [ ] Settings persistence (JSON config file)
-- [ ] Multi-monitor awareness
-- [ ] Configurable reminder intervals

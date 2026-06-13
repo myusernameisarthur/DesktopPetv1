@@ -75,6 +75,7 @@ Every row gets an on/off switch (Phase 2). "New" marks behaviors not yet built.
 | Bark at new window | Reactive | a new top-level window opens | head-back bark, brief | new |
 | Greet | Reactive | app launch / return from long idle | stand, wag, maybe a bark | new (optional) |
 | Zoomies | Idle (rare) | rare random | fast back-and-forth dash | new (optional) |
+| Climb up on launch | Reactive | app launch | paws over taskbar ledge, haul up, settle | new (post-freeze, owner-approved 2026-06-12; placeholder art) |
 
 ---
 
@@ -158,7 +159,7 @@ and the HUD.
 
 Exit criteria: behavior list is **frozen**. This freeze is the gate to art, per your rule.
 
-### Phase 6 — Art and animation implementation (the visual leap)
+### Phase 6 — Art and animation implementation (the visual leap) ✅ INTEGRATED 2026-06-12 (see PHASE-6-REPORT.md) — renderer, pipeline and code complete; 19 placeholder clips await regeneration (OPEN-ITEMS.md is the ship-blocking art gate)
 
 Goal: replace procedural drawing with real Persi art. This is the largest single phase and
 depends on the frozen behavior list, because the list defines exactly which animations need
@@ -240,7 +241,9 @@ Phase 2  done            every behavior toggleable
 Phase 3  done            distinct locomotion
 Phase 4  partial         gesture DONE; type-along + window-bark designed, deferred
 Phase 5  done            beg, greet, zoomies, bark -> list FROZEN
-Phase 6  art             frames, spritesheets, renderer swap
+Phase 6  done (code)     34 clips + props in-app, kit selector, size toggle,
+                         startup climb; 19 clips still placeholder art
+                         (OPEN-ITEMS.md) — regen gate before ship
 Phase 7  polish          multi-monitor, DPI, perf, HUD off
 Phase 8  ship            sign, install, startup, update
 ```

@@ -8,7 +8,8 @@ import time
 from ctypes import wintypes
 from enum import Enum
 
-from PyQt5.QtWidgets import QApplication, QWidget, QMenu, QAction
+from PyQt5.QtWidgets import (QApplication, QWidget, QMenu, QAction,
+                             QActionGroup)
 from PyQt5.QtCore import Qt, QTimer, QRect
 from PyQt5.QtGui import (QPainter, QColor, QBrush, QPen, QRegion,
                          QPainterPath, QFont, QCursor)
@@ -18,9 +19,12 @@ from gestures import CircleGestureRecognizer
 from settings import Settings
 
 try:
-    from sprites import SpriteSet
+    from sprites import SpriteSet, available_kits
 except Exception:           # missing module/assets must never kill the app
     SpriteSet = None
+
+    def available_kits():
+        return {}
 
 
 class State(Enum):
@@ -41,6 +45,7 @@ class State(Enum):
     BEG = 14            # command: double-click -> sit up, front paws raised
     GREETING = 15       # reactive: launch / return from long idle -> hops + wag
     ZOOMIES = 16        # idle (rare): fast back-and-forth dashes
+    CLIMBING = 17       # startup: hauls up from behind the taskbar ledge
 
 
 # Single source of truth: the animation each state actually renders.
@@ -65,6 +70,9 @@ ANIMATION = {
     State.BEG:            "beg-sit-up",   # torso up on haunches, front paws dangle
     State.GREETING:       "greet-wag",    # little hops + fast wag (+ optional bark)
     State.ZOOMIES:        "dash",         # flat-out sprint, direction flips
+    State.CLIMBING:       "climb-up",     # paws over the ledge, haul up, settle
+                                          # (no sprite clip yet — open art item;
+                                          # procedural placeholder until then)
 }
 
 
@@ -129,9 +137,12 @@ def get_taskbar_rect():
     return tb_left, tb_top, tb_right, tb_bottom
 
 
-WIN_H = 95
+# Tall enough for the dog at the largest size toggle (2x: ~140px of sprite
+# above the feet) plus headroom for the rising zzz bubbles. Everything draws
+# bottom-anchored, so extra height just extends the invisible masked area up.
+WIN_H = 190
 # Drawing uses DOG_BASE as the exclusive bottom of bounding rects, so the last
-# painted pixel row is DOG_BASE - 1 = WIN_H - 1 = 94, which maps to tb_top.
+# painted pixel row is DOG_BASE - 1 = WIN_H - 1, which maps to tb_top.
 DOG_BASE = WIN_H
 
 
@@ -164,10 +175,18 @@ class Biscuit(QWidget):
         # (window-local x == screen x because window always starts at x=0).
         self.win_w = self.sw
 
-        # Corner home positions (screen x = window-local x)
-        self.bed_cx  = self.tb_right - 160
-        self.bowl_cx = self.tb_right - 95
-        self.ball_cx = self.tb_right - 65
+        # Per-behavior on/off switches + art kit/scale, persisted to
+        # %APPDATA%\Persi. Behaviors read their switch when they would fire;
+        # the Test menu bypasses the switches by setting states directly.
+        self.settings = Settings()
+
+        # Size toggle: multiplies the dog and the corner props (sprite frames
+        # scale nearest-neighbor via a painter transform, so pixels stay crisp).
+        self.art_scale = min(2.0, max(0.5, float(self.settings.get("art.scale"))))
+
+        # Corner home positions (screen x = window-local x), spaced by the
+        # art scale so the props never overlap when drawn larger.
+        self._layout_corner()
 
         # Dog starts on the bed
         self.dog_sx = float(self.bed_cx)
@@ -194,7 +213,7 @@ class Biscuit(QWidget):
         self.zzz_cd = 200
 
         self.walk_min = float(self.tb_left + 100)
-        self.walk_max = float(self.bed_cx)  # dog returns to bed when going right
+        # walk_max (return-to-bed bound) is kept in sync by _layout_corner()
 
         self.startup_enabled = self._check_startup()
 
@@ -236,20 +255,19 @@ class Biscuit(QWidget):
         # circling the cursor around the dog ~3 times (pure cursor math).
         self.gesture = CircleGestureRecognizer()
 
-        # Per-behavior on/off switches, persisted to %APPDATA%\Persi.
-        # Behaviors read their switch when they would fire; the Test menu
-        # bypasses the switches by setting states directly.
-        self.settings = Settings()
-
-        # Phase 6 sprite renderer (assets/manifest.json). None -> procedural.
-        # Per-state fallback also happens inside _sprite_draw, so partial
-        # asset sets are fine while art is iterated.
-        self.sprites = None
-        if SpriteSet is not None:
-            try:
-                self.sprites = SpriteSet()
-            except Exception:
-                self.sprites = None
+        # Phase 6 sprite kits (assets/manifest.json + drop-in assets/kits/*).
+        # self.sprites is the active kit's SpriteSet, or None for the
+        # procedural renderer. Per-state fallback also happens inside
+        # _sprite_draw, so partial asset sets are fine while art is iterated.
+        self.sprite_kits = available_kits() if SpriteSet is not None else {}
+        self._kit_cache = {}
+        self.art_kit = self.settings.get("art.kit")
+        if self.art_kit != "procedural" and self.art_kit not in self.sprite_kits:
+            # Stored kit folder is gone/renamed/hand-edited — fall back and
+            # heal the file, so the menu's checkmark matches what's persisted.
+            self.art_kit = "pixel" if "pixel" in self.sprite_kits else "procedural"
+            self.settings.set("art.kit", self.art_kit)
+        self.sprites = self._load_kit(self.art_kit)
 
         # Reminder pending flags
         self.stretch_pending = False
@@ -288,11 +306,21 @@ class Biscuit(QWidget):
         self.show()
         self._assert_topmost()
 
-        # Greet shortly after launch (reactive.greet switch checked at fire time)
+        # Launch sequence: climb up from behind the taskbar ledge, then greet.
+        # With the climb switched off, greet shortly after launch as before
+        # (reactive.greet switch checked at fire time either way).
         self._greet_timer = QTimer(self)
         self._greet_timer.setSingleShot(True)
         self._greet_timer.timeout.connect(self._launch_greet)
-        self._greet_timer.start(1800)
+        self._climb_then_greet = False
+        if self.settings.get("reactive.startup_climb"):
+            # Order matters: _start_climb() clears _climb_then_greet (so a
+            # later Test-menu climb never chains a greet), then we arm it for
+            # this one launch climb.
+            self._start_climb()
+            self._climb_then_greet = True
+        else:
+            self._greet_timer.start(1800)
 
         # === DEBUG HUD (dev tool — delete this block + debug_hud.py to remove) ===
         from debug_hud import DebugHUD
@@ -318,6 +346,63 @@ class Biscuit(QWidget):
         name = STATE_GAIT.get(self.state)
         return GAITS[name] if name is not None else None
 
+    # ── art kit / size ───────────────────────────────────────────────────────
+
+    def _layout_corner(self):
+        """Corner home positions, spaced by the art scale so the bed, bowl and
+        ball keep clear of each other at every size. Dog walk targets reference
+        these, so they stay consistent automatically."""
+        k = self.art_scale
+        self.bed_cx = self.tb_right - int(160 * k)
+        self.bowl_cx = self.tb_right - int(95 * k)
+        self.ball_cx = self.tb_right - int(65 * k)
+        self.walk_max = float(self.bed_cx)
+
+    def _load_kit(self, name):
+        """SpriteSet for a kit name, or None (= procedural). Cached per kit so
+        switching back and forth in the menu doesn't reload frames."""
+        if SpriteSet is None or name == "procedural" or name not in self.sprite_kits:
+            return None
+        if name not in self._kit_cache:
+            try:
+                self._kit_cache[name] = SpriteSet(self.sprite_kits[name])
+            except Exception:
+                self._kit_cache[name] = None
+        return self._kit_cache[name]
+
+    def _set_art_kit(self, name):
+        self.art_kit = name
+        self.settings.set("art.kit", name)
+        self.sprites = self._load_kit(name)
+
+    def _set_art_scale(self, k):
+        on_bed = abs(self.dog_sx - self.bed_cx) < 3
+        ball_home = abs(self.ball_x - self.ball_cx) < 5
+        self.art_scale = k
+        self.settings.set("art.scale", k)
+        self._layout_corner()
+        # Re-pin whatever was sitting at a home position to the new layout
+        if on_bed:
+            self.dog_sx = float(self.bed_cx)
+        if ball_home:
+            self.ball_x = float(self.ball_cx)
+        # Zoomies caches its dash endpoints relative to bed_cx, which just
+        # moved — recompute them (keeping the current heading) so the dog
+        # doesn't dash through the relocated bed/corner.
+        if self.state == State.ZOOMIES:
+            heading_right = self.zoom_dest > self.dog_sx
+            self._set_zoom_bounds()
+            self.zoom_dest = self.zoom_right if heading_right else self.zoom_left
+
+    def _one_shot_ticks(self, name, default):
+        """Duration for a one-shot behavior: the active kit's clip length, so
+        the state machine and the animation end together; the procedural
+        default otherwise."""
+        s = self.sprites
+        if s is not None and s.has(name):
+            return s.clips[name].total
+        return default
+
     # ── window placement ─────────────────────────────────────────────────────
 
     def _place_window(self):
@@ -328,22 +413,35 @@ class Biscuit(QWidget):
 
     def _update_mask(self):
         dx = int(self.dog_sx)
-        if self.state in (State.SLEEPING, State.STRETCHING, State.SCRATCHING,
-                          State.ROLL_OVER):
-            dog_r = QRect(dx - 60, WIN_H - 38, 120, 38)
+        k = self.art_scale
+        if self.sprites is not None:
+            # Sprite frames are 128 wide with content up to ~70px above the
+            # feet (measure_bounds.py) — one rect for every pose, otherwise
+            # the mask clips the nose/tail off the wider clips. The +14 over
+            # 70 is headroom for the bounce of EXCITED/GREETING (up to 8px),
+            # which lifts the whole frame and would otherwise clip the head.
+            dog_r = QRect(dx - int(64 * k), WIN_H - int(84 * k),
+                          int(128 * k), int(84 * k))
+        elif self.state in (State.SLEEPING, State.STRETCHING, State.SCRATCHING,
+                            State.ROLL_OVER):
+            dog_r = QRect(dx - int(60 * k), WIN_H - int(38 * k),
+                          int(120 * k), int(38 * k))
         else:
-            dog_r = QRect(dx - 52, WIN_H - 75, 104, 75)
+            dog_r = QRect(dx - int(52 * k), WIN_H - int(75 * k),
+                          int(104 * k), int(75 * k))
 
-        decor_left  = self.bed_cx - 42
-        decor_right = self.ball_cx + 12
-        decor_r = QRect(decor_left, WIN_H - 25, decor_right - decor_left, 25)
+        decor_left  = self.bed_cx - int(42 * k)
+        decor_right = self.ball_cx + int(12 * k)
+        decor_r = QRect(decor_left, WIN_H - int(25 * k),
+                        decor_right - decor_left, int(25 * k))
 
         region = QRegion(dog_r) | QRegion(decor_r)
 
         # Ball away from its home corner also needs to be in mask to be visible
         if self.ball_visible and abs(self.ball_x - self.ball_cx) > 20:
             bx = int(self.ball_x)
-            region |= QRegion(QRect(bx - 12, WIN_H - 20, 24, 20))
+            region |= QRegion(QRect(bx - int(12 * k), WIN_H - int(20 * k),
+                                    int(24 * k), int(20 * k)))
 
         self.setMask(region)
 
@@ -375,7 +473,7 @@ class Biscuit(QWidget):
                 self._maybe_greet()
 
         # Roll-over circle gesture (armed by a dog click; pure cursor math)
-        dog_center_y = self.tb_top - 30
+        dog_center_y = self.tb_top - int(30 * self.art_scale)
         if self.gesture.tick(self.dog_sx, dog_center_y, cp.x(), cp.y()):
             if (not self.paused
                     and self.settings.get("command.roll_over")
@@ -385,7 +483,7 @@ class Biscuit(QWidget):
 
         # Cursor proximity (behavior switch: interactive.cursor_alert)
         if self.settings.get("interactive.cursor_alert"):
-            dog_screen_cy = self.tb_top - 25
+            dog_screen_cy = self.tb_top - int(25 * self.art_scale)
             dist = math.hypot(cp.x() - self.dog_sx, cp.y() - dog_screen_cy)
             was_near = self.cursor_near
             self.cursor_near = dist < 150
@@ -429,17 +527,21 @@ class Biscuit(QWidget):
             # The sigh's exhale releases one soft "z" puff at the swell's peak.
             if (fa is not None and fa.name == "sigh"
                     and fa.ticks == fa.total // 3):
-                hx = int(self.dog_sx) + self.facing * 25
-                self.bubbles.append(ZzzBubble(hx, DOG_BASE - 42, 9))
+                k = self.art_scale
+                hx = int(self.dog_sx) + self.facing * int(25 * k)
+                self.bubbles.append(ZzzBubble(hx, DOG_BASE - int(42 * k),
+                                              max(6, int(9 * k))))
 
         # Zzz
         if self.state == State.SLEEPING and not self.paused:
             self.zzz_cd -= 1
             if self.zzz_cd <= 0:
                 self.zzz_cd = random.randint(130, 230)
-                hx = int(self.dog_sx) + self.facing * 25
-                hy = DOG_BASE - 38
-                self.bubbles.append(ZzzBubble(hx, hy, random.randint(7, 11)))
+                k = self.art_scale
+                hx = int(self.dog_sx) + self.facing * int(25 * k)
+                hy = DOG_BASE - int(38 * k)
+                self.bubbles.append(ZzzBubble(
+                    hx, hy, max(6, int(random.randint(7, 11) * k))))
 
         self.bubbles = [b for b in self.bubbles if b.tick()]
 
@@ -519,6 +621,8 @@ class Biscuit(QWidget):
             self._update_greeting()
         elif self.state == State.ZOOMIES:
             self._update_zoomies()
+        elif self.state == State.CLIMBING:
+            self._update_climbing()
 
     def _arm_sleep_timer(self):
         """Schedule the next walk after 4–8 minutes of sleep."""
@@ -611,15 +715,35 @@ class Biscuit(QWidget):
 
         fa = self.fidgets.active   # idle fidget delta (None outside SLEEPING/ALERT)
 
+        # Size toggle: everything dog-shaped (sprite or procedural) scales
+        # around the point where the feet meet the taskbar. Pixmaps scale
+        # nearest-neighbor (no SmoothPixmapTransform hint), so pixel art
+        # stays crisp at any size.
+        k = self.art_scale
+        if k != 1.0:
+            p.save()
+            p.translate(cx, DOG_BASE)
+            p.scale(k, k)
+            p.translate(-cx, -DOG_BASE)
+
         # Phase 6 sprite renderer: if a clip covers the current state/fidget,
         # draw it and skip the procedural dog. Bubbles still drawn (procedural
         # zzz per the inventory). Falls through per-state when a clip is missing.
-        if self._sprite_draw(p, cx, base, f, fa):
-            self._draw_bubbles(p, ZZZ)
-            return
+        if not self._sprite_draw(p, cx, base, f, fa):
+            self._draw_dog_procedural(p, cx, base, f, fa, excited, alert,
+                                      BROWN, DARK, BLACK, WHITE, PINK)
 
-        # Dog visual
-        if self.state == State.ROLL_OVER:
+        if k != 1.0:
+            p.restore()
+
+        self._draw_bubbles(p, ZZZ)
+
+    def _draw_dog_procedural(self, p, cx, base, f, fa, excited, alert,
+                             BROWN, DARK, BLACK, WHITE, PINK):
+        if self.state == State.CLIMBING:
+            self._draw_climb(p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK)
+
+        elif self.state == State.ROLL_OVER:
             self._draw_rollover(p, cx, base, f, BROWN, DARK, BLACK)
 
         elif self.state == State.BEG:
@@ -700,8 +824,6 @@ class Biscuit(QWidget):
             p.setBrush(QColor(215, 70, 45))
             p.drawEllipse(bx - r, by, r * 2, r * 2)
 
-        self._draw_bubbles(p, ZZZ)
-
     def _draw_bubbles(self, p, ZZZ):
         for b in self.bubbles:
             alpha = max(0, min(255, int(b.alpha)))
@@ -722,11 +844,24 @@ class Biscuit(QWidget):
         behavior started).
         """
         s = self.sprites
-        if s is None or not self.settings.get("art.sprites"):
+        if s is None:
             return False
 
         if fa is not None and self.state in (State.SLEEPING, State.ALERT):
             pm = s.fidget_pixmap(fa.name, fa.progress, f)
+            if pm is not None:
+                s.draw_dog(p, pm, cx, base)
+                return True
+
+        # Sniff-walk plays as two sub-loops of one clip: the stride frames
+        # while travelling, the 2 nose-down sniff frames during a pause
+        # (task_phase 1) — instead of looping the whole clip through a pause.
+        if self.state == State.SNIFF_WALK and s.has("sniff-walk"):
+            n = len(s.clips["sniff-walk"].frames)
+            if self.task_phase == 0:
+                pm = s.get_range("sniff-walk", self._ticks, f, 0, n - 3)
+            else:
+                pm = s.get_range("sniff-walk", self._ticks, f, n - 2, n - 1)
             if pm is not None:
                 s.draw_dog(p, pm, cx, base)
                 return True
@@ -742,22 +877,38 @@ class Biscuit(QWidget):
         s.draw_dog(p, pm, cx, base)
         return True
 
+    def _push_anchor_scale(self, p, ax, ay):
+        """Painter transform scaling by the size toggle around an anchor
+        point (a thing's own ground contact, so it doesn't drift sideways).
+        Returns True if a transform was pushed — caller must p.restore()."""
+        k = self.art_scale
+        if k == 1.0:
+            return False
+        p.save()
+        p.translate(ax, ay)
+        p.scale(k, k)
+        p.translate(-ax, -ay)
+        return True
+
+    def _blit_prop(self, p, pm, cx, ground):
+        pushed = self._push_anchor_scale(p, cx, ground)
+        p.drawPixmap(cx - pm.width() // 2, ground - pm.height(), pm)
+        if pushed:
+            p.restore()
+
     def _draw_corner(self, p):
         # Phase 6 sprite props (bed, bowl, ball); procedural fallback below.
-        if self.sprites is not None and self.settings.get("art.sprites"):
+        if self.sprites is not None:
             ground = WIN_H
             bed = self.sprites.prop("bed")
             bowl = self.sprites.prop("bowl-full" if self.bowl_full
                                      else "bowl-empty")
             if bed is not None and bowl is not None:
-                p.drawPixmap(self.bed_cx - bed.width() // 2,
-                             ground - bed.height(), bed)
-                p.drawPixmap(self.bowl_cx - bowl.width() // 2,
-                             ground - bowl.height(), bowl)
+                self._blit_prop(p, bed, self.bed_cx, ground)
+                self._blit_prop(p, bowl, self.bowl_cx, ground)
                 ball = self.sprites.prop("ball")
                 if self.ball_visible and ball is not None:
-                    p.drawPixmap(int(self.ball_x) - ball.width() // 2,
-                                 ground - ball.height(), ball)
+                    self._blit_prop(p, ball, int(self.ball_x), ground)
                 return
         self._draw_corner_procedural(p)
 
@@ -773,6 +924,7 @@ class Biscuit(QWidget):
         ground = WIN_H
 
         # Bed
+        pushed = self._push_anchor_scale(p, self.bed_cx, ground)
         bw, bh = 72, 18
         p.setPen(QPen(BED_RIM, 1.5))
         p.setBrush(BED_FILL)
@@ -781,22 +933,30 @@ class Biscuit(QWidget):
         p.setBrush(Qt.NoBrush)
         p.drawLine(self.bed_cx - bw // 2 + 7, ground - bh // 2,
                    self.bed_cx + bw // 2 - 7, ground - bh // 2)
+        if pushed:
+            p.restore()
 
         # Water bowl — full=blue, empty=grey
+        pushed = self._push_anchor_scale(p, self.bowl_cx, ground)
         bw2, bh2 = 22, 12
         p.setPen(QPen(BOWL_RIM, 1.5))
         p.setBrush(BOWL_FULL if self.bowl_full else BOWL_EMPTY)
         p.drawEllipse(self.bowl_cx - bw2 // 2, ground - bh2, bw2, bh2)
+        if pushed:
+            p.restore()
 
         # Ball — drawn at ball_x (may be corner or somewhere on taskbar)
         if self.ball_visible:
             bx = int(self.ball_x)
+            pushed = self._push_anchor_scale(p, bx, ground)
             r = 8
             p.setPen(Qt.NoPen)
             p.setBrush(BALL_COL)
             p.drawEllipse(bx - r, ground - r * 2, r * 2, r * 2)
             p.setBrush(SHINE)
             p.drawEllipse(bx - r + 2, ground - r * 2 + 2, r // 2 + 2, r // 2 + 1)
+            if pushed:
+                p.restore()
 
     def _draw_sleeping(self, p, cx, base, f, BROWN, DARK, BLACK):
         # Active lying fidget (engine guarantees None outside SLEEPING; the
@@ -1009,19 +1169,26 @@ class Biscuit(QWidget):
         lx = event.pos().x()
         ly = event.pos().y()
 
+        k = self.art_scale
         if event.button() == Qt.LeftButton:
+            # Mid-climb the dog has no footing yet — swallow every left click
+            # until it tops out. (Must precede the ball check: a ball click
+            # would otherwise start a fetch and strand the launch-greet chain.)
+            if self.state == State.CLIMBING:
+                return
+
             # Ball click — only when ball is at home corner and no fetch in progress
             if (self.settings.get("interactive.fetch_ball")
                     and self.ball_visible
                     and abs(self.ball_x - self.ball_cx) < 5
-                    and abs(lx - self.ball_cx) < 12
-                    and ly > WIN_H - 20
+                    and abs(lx - self.ball_cx) < int(12 * k)
+                    and ly > WIN_H - int(20 * k)
                     and self.state not in (State.FETCHING, State.RETURNING_BALL)):
                 self._throw_ball()
                 return
 
             # Bowl click — refill
-            if abs(lx - self.bowl_cx) < 13 and ly > WIN_H - 14:
+            if abs(lx - self.bowl_cx) < int(13 * k) and ly > WIN_H - int(14 * k):
                 self._refill_bowl()
                 return
 
@@ -1053,12 +1220,14 @@ class Biscuit(QWidget):
             return
         lx = event.pos().x()
         ly = event.pos().y()
+        k = self.art_scale
         # Leave the ball and bowl to the single-click handlers
-        if abs(lx - self.ball_cx) < 12 and ly > WIN_H - 20:
+        if abs(lx - self.ball_cx) < int(12 * k) and ly > WIN_H - int(20 * k):
             return
-        if abs(lx - self.bowl_cx) < 13 and ly > WIN_H - 14:
+        if abs(lx - self.bowl_cx) < int(13 * k) and ly > WIN_H - int(14 * k):
             return
-        if not self.paused and self.settings.get("command.beg"):
+        if (not self.paused and self.state != State.CLIMBING
+                and self.settings.get("command.beg")):
             self._start_beg()
 
     def _add_toggle(self, menu, label, key):
@@ -1085,8 +1254,35 @@ class Biscuit(QWidget):
         a_start.triggered.connect(self._handle_startup)
         menu.addAction(a_start)
 
-        if self.sprites is not None:
-            self._add_toggle(menu, "Pixel-art sprites", "art.sprites")
+        # Art: which renderer (kit) draws the dog, and how big everything is.
+        # Groups + actions are parented to the (transient) submenu so they're
+        # destroyed with it instead of piling up on the widget per right-click.
+        m_art = menu.addMenu("Art")
+        kit_group = QActionGroup(m_art)
+        kit_choices = [("procedural", "Classic shapes (procedural)")]
+        kit_choices += [(name, "Pixel-art sprites" if name == "pixel"
+                         else f"Sprites: {name}")
+                        for name in self.sprite_kits]
+        for kit, label in kit_choices:
+            a = QAction(label, m_art)
+            a.setCheckable(True)
+            a.setChecked(self.art_kit == kit)
+            a.setActionGroup(kit_group)
+            a.triggered.connect(lambda chk, n=kit: self._set_art_kit(n))
+            m_art.addAction(a)
+        m_art.addSeparator()
+        size_group = QActionGroup(m_art)
+        for label, val in (("Size: small (75%)", 0.75),
+                           ("Size: normal (100%)", 1.0),
+                           ("Size: large (125%)", 1.25),
+                           ("Size: extra large (150%)", 1.5),
+                           ("Size: huge (200%)", 2.0)):
+            a = QAction(label, m_art)
+            a.setCheckable(True)
+            a.setChecked(abs(self.art_scale - val) < 1e-6)
+            a.setActionGroup(size_group)
+            a.triggered.connect(lambda chk, v=val: self._set_art_scale(v))
+            m_art.addAction(a)
 
         menu.addSeparator()
         menu.addSection("Behaviors")
@@ -1117,6 +1313,8 @@ class Biscuit(QWidget):
         m_react = menu.addMenu("Reactive")
         self._add_toggle(m_react, "Greet on launch / your return",
                          "reactive.greet")
+        self._add_toggle(m_react, "Climb up on launch",
+                         "reactive.startup_climb")
 
         menu.addSeparator()
         menu.addSection("Test")
@@ -1130,7 +1328,8 @@ class Biscuit(QWidget):
                                ("Test: bark", self._test_bark),
                                ("Test: beg", self._test_beg),
                                ("Test: greet", self._test_greet),
-                               ("Test: zoomies", self._test_zoomies)):
+                               ("Test: zoomies", self._test_zoomies),
+                               ("Test: climb up", self._test_climb)):
             a = QAction(label, self)
             a.triggered.connect(handler)
             menu.addAction(a)
@@ -1188,7 +1387,7 @@ class Biscuit(QWidget):
         if self.state in (State.FETCHING, State.RETURNING_BALL,
                           State.STRETCHING, State.DRINKING, State.TASK_RETURN,
                           State.ROLL_OVER, State.BARKING, State.BEG,
-                          State.GREETING):
+                          State.GREETING, State.CLIMBING):
             return
         if self.stretch_pending:
             self.stretch_pending = False
@@ -1250,7 +1449,7 @@ class Biscuit(QWidget):
 
     def _update_drinking(self):
         if self.task_phase == 0:
-            drink_pos = float(self.bowl_cx - 20)
+            drink_pos = float(self.bowl_cx - int(20 * self.art_scale))
             if self._walk_toward(drink_pos):
                 self.dog_sx = drink_pos
                 self.facing = 1
@@ -1281,7 +1480,8 @@ class Biscuit(QWidget):
         self.returning = False
         self.task_phase = 0
         self.task_frames = 0
-        self.state_frames = 75              # ~3.5 s one-shot
+        # ~3.5 s procedurally; the sprite clip's own length when one is active
+        self.state_frames = self._one_shot_ticks("roll-over", 75)
         self.tongue = False
         self.bounce_val = 0.0
         self.state = State.ROLL_OVER
@@ -1304,7 +1504,7 @@ class Biscuit(QWidget):
         self.returning = False
         self.task_phase = 0
         self.task_frames = 0
-        self.state_frames = 26              # ~1.2 s, two bobs
+        self.state_frames = self._one_shot_ticks("bark", 26)   # ~1.2 s
         self.state = State.BARKING
 
     def _update_barking(self):
@@ -1321,7 +1521,7 @@ class Biscuit(QWidget):
         self.returning = False
         self.task_phase = 0
         self.task_frames = 0
-        self.state_frames = 50              # ~2.4 s sit-up
+        self.state_frames = self._one_shot_ticks("beg-sit-up", 50)  # ~2.4 s
         self.tongue = False
         self.bounce_val = 0.0
         self.state = State.BEG
@@ -1370,6 +1570,12 @@ class Biscuit(QWidget):
                 self.facing = -1
                 self._arm_sleep_timer()
 
+    def _set_zoom_bounds(self):
+        """Dash endpoints, derived from the (scale-dependent) bed position so
+        the run always clears the corner. Recomputed if the scale changes."""
+        self.zoom_left = max(self.walk_min, self.bed_cx - 450)
+        self.zoom_right = self.bed_cx - int(80 * self.art_scale)
+
     def _start_zoomies(self):
         self.bubbles.clear()
         self._sleep_timer.stop()
@@ -1377,8 +1583,7 @@ class Biscuit(QWidget):
         self.task_phase = 0                 # dashes completed
         self.task_frames = 0
         self.state_frames = random.randint(3, 5)   # total dashes
-        self.zoom_left = max(self.walk_min, self.bed_cx - 450)
-        self.zoom_right = self.bed_cx - 80
+        self._set_zoom_bounds()
         self.zoom_dest = self.zoom_left
         self.state = State.ZOOMIES
 
@@ -1392,6 +1597,35 @@ class Biscuit(QWidget):
             self.zoom_dest = (self.zoom_right
                               if abs(self.zoom_dest - self.zoom_left) < 1.0
                               else self.zoom_left)
+
+    # ── startup climb ─────────────────────────────────────────────────────────
+
+    def _start_climb(self):
+        """Haul up from behind the taskbar like a ledge (launch sequence)."""
+        # Only the launch path re-arms this immediately after; a Test-menu or
+        # any other climb stays inert with respect to the greet chain.
+        self._climb_then_greet = False
+        self.bubbles.clear()
+        self._sleep_timer.stop()
+        self.returning = False
+        self.task_phase = 0
+        self.task_frames = 0
+        self.state_frames = self._one_shot_ticks("climb-up", 80)   # ~2.6 s
+        self.tongue = False
+        self.bounce_val = 0.0
+        self.facing = -1
+        self.state = State.CLIMBING
+
+    def _update_climbing(self):
+        self.task_frames += 1
+        if self.task_frames >= self.state_frames:
+            self.task_frames = 0
+            self.state = State.SLEEPING
+            self.facing = -1
+            self._arm_sleep_timer()
+            if self._climb_then_greet:
+                self._climb_then_greet = False
+                self._greet_timer.start(700)   # topped out — now say hello
 
     # ── idle behaviour updates ────────────────────────────────────────────────
 
@@ -1611,11 +1845,59 @@ class Biscuit(QWidget):
                   body_bottom + 4 - sweep)
         p.drawPath(tp)
 
+    def _draw_climb(self, p, cx, base, f, BROWN, DARK, BLACK, WHITE, PINK):
+        """CLIMBING: haul up over the taskbar edge like a ledge.
+
+        Procedural placeholder — the pixel-art kit has no climb-up clip yet
+        (open art item; _sprite_draw picks it up automatically once a clip
+        named "climb-up" lands in the manifest). Anything drawn below
+        DOG_BASE is clipped at the window edge, which reads as "still behind
+        the taskbar".
+        """
+        prog = self.task_frames / max(1, self.state_frames)
+        edge = DOG_BASE
+
+        if prog < 0.45:
+            # Two front paws hook over the edge; the head pulls up behind
+            # them with little effort-bobs.
+            t = prog / 0.45
+            p.setPen(Qt.NoPen)
+            p.setBrush(DARK)
+            for px_off in (-10, 6):
+                p.drawRoundedRect(cx + px_off, edge - 5, 6, 7, 2, 2)
+            bob = math.sin(self.task_frames * 0.45) * 2.5 * (1.0 - t)
+            hr = 13
+            hcx = cx - f * 2
+            hcy = edge + 14 - t * 24 + bob
+            p.setBrush(BROWN)
+            p.drawEllipse(int(hcx - hr), int(hcy - hr), hr * 2, hr * 2)
+            p.setBrush(DARK)
+            p.drawEllipse(int(hcx - f * 2 - 5), int(hcy - hr + 1), 9, 14)
+            p.setBrush(BLACK)
+            p.drawEllipse(int(hcx + f * 4 - 3), int(hcy - 7), 6, 6)
+            p.setBrush(WHITE)
+            p.drawEllipse(int(hcx + f * 4 - 1), int(hcy - 6), 2, 2)
+            p.setBrush(BLACK)
+            p.drawEllipse(int(hcx + f * 9 - 3), int(hcy + 1), 7, 5)
+        elif prog < 0.85:
+            # Body hauls up; legs scrabble (the walking swing reads as
+            # scrambling for purchase while the body is still half-hidden).
+            t = (prog - 0.45) / 0.40
+            body_drop = int((1.0 - t) * 50)
+            self._draw_standing(p, cx, base + body_drop, f, BROWN, DARK,
+                                BLACK, WHITE, PINK, True, False, False,
+                                head_bob=-3)
+        else:
+            # Up — settle with a quick little shake before resting.
+            jx = int(math.sin(self.task_frames * 1.15) * 2)
+            self._draw_standing(p, cx + jx, base, f, BROWN, DARK, BLACK,
+                                WHITE, PINK, False, False, True)
+
     # ── fetch / bowl ──────────────────────────────────────────────────────────
 
     def _throw_ball(self):
         min_x = int(self.walk_min)
-        max_x = int(self.bed_cx) - 70
+        max_x = int(self.bed_cx) - int(70 * self.art_scale)
         if max_x <= min_x:
             return
         self.ball_x = float(random.randint(min_x, max_x))
@@ -1658,7 +1940,7 @@ class Biscuit(QWidget):
 
     def _test_fetch(self):
         min_x = int(self.walk_min)
-        max_x = int(self.bed_cx) - 70
+        max_x = int(self.bed_cx) - int(70 * self.art_scale)
         if max_x <= min_x:
             return
         self.ball_x = float(random.randint(min_x, max_x))
@@ -1702,6 +1984,9 @@ class Biscuit(QWidget):
 
     def _test_zoomies(self):
         self._start_zoomies()
+
+    def _test_climb(self):
+        self._start_climb()
 
     def _test_sniff(self):
         self.bubbles.clear()

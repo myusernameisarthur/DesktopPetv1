@@ -1,6 +1,19 @@
 # Phase 6 Art — Open Items
 
-Updated: 2026-06-12
+Updated: 2026-06-12 (integration session: added climb-up)
+
+## OPEN: climb-up — new clip, no art exists yet (procedural placeholder in-app)
+
+Owner-approved post-freeze addition (2026-06-12): on launch the dog climbs up
+from behind the taskbar like a ledge, then greets. The app plays a procedural
+placeholder today; biscuit.py automatically switches to a sprite clip named
+`climb-up` the moment one lands in the manifest (add frames to
+assets/frames/climb-up/, add a pack.py CLIPS row, rerun pack + verify).
+
+### Regeneration spec (side view, facing left, standing ref)
+| Clip | Frames | Prompt notes |
+|------|--------|--------------|
+| climb-up | ~10 | one-shot ~2.6s: front paws hook over a ledge at the baseline (2), head pulls up behind them with effort (3), body hauls up legs scrambling (3), settle + quick shake (2). The ledge is the frame baseline y=116 — author the climb IN the pose (paws-on-ledge), no below-baseline content needed. |
 
 ## OPEN: Standing set failed quality review — regenerate with external tool
 

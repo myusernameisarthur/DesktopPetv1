@@ -33,8 +33,12 @@ DEFAULTS = {
     "command.beg": True,
     # Reactive (system events)
     "reactive.greet": True,
-    # Art (Phase 6: sprite renderer; off = procedural drawing)
-    "art.sprites": True,
+    "reactive.startup_climb": True,
+    # Art (Phase 6): which sprite kit renders the dog ("procedural" = old
+    # shape renderer; "pixel" = Phase 6 pixel art; see sprites.available_kits)
+    # and the size multiplier applied to dog + props.
+    "art.kit": "pixel",
+    "art.scale": 1.0,
     # Debug (dev tooling; default flips off in Phase 7)
     "debug.hud": True,
 }
@@ -46,9 +50,13 @@ class Settings:
         self.dir = os.path.join(appdata, app_name)
         self.path = os.path.join(self.dir, "settings.json")
         self._data = dict(DEFAULTS)
+        self._migrated = False
         self._load()
-        if not os.path.exists(self.path):
-            self.save()        # first run: materialize the defaults file
+        if not os.path.exists(self.path) or self._migrated:
+            # First run: materialize the defaults file. Migration: commit the
+            # rewritten keys now so it doesn't re-run from the stale file on
+            # every launch (it would, if the user never changes a setting).
+            self.save()
 
     def _load(self):
         try:
@@ -62,6 +70,10 @@ class Settings:
         for key, value in stored.items():
             if key in DEFAULTS and isinstance(value, type(DEFAULTS[key])):
                 self._data[key] = value
+        # Migration: "art.sprites" (Phase 6 bool) became "art.kit" (str).
+        if "art.kit" not in stored and stored.get("art.sprites") is False:
+            self._data["art.kit"] = "procedural"
+            self._migrated = True
 
     def get(self, key):
         return self._data[key]

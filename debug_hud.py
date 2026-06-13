@@ -53,7 +53,7 @@ def hud_phase(dog):
     if n == "STRETCHING":
         return f"{int(min(tf, 90) / 90.0 * 100)}% done"
     if n in ("SCRATCHING", "CHEWING", "ROLL_OVER", "BARKING", "BEG",
-             "GREETING"):
+             "GREETING", "CLIMBING"):
         return f"{int(min(tf, sf) / sf * 100)}% done" if sf else "..."
     if n == "ZOOMIES":
         return f"dash {min(tp + 1, sf)}/{sf}"
@@ -123,9 +123,10 @@ class DebugHUD(QWidget):
         # Widest realistic values: longest state name / fidget / gesture line.
         widest_val = max(fm_v.horizontalAdvance("RETURNING_BALL"),
                          fm_v.horizontalAdvance("weight-shift 0.5s"),
+                         fm_v.horizontalAdvance("procedural x1.25"),
                          fm_v.horizontalAdvance("2.9/3 loops 9.9s"))
         w = self._x_value + widest_val + self._pad
-        h = self._y0 + self._line_h * 7 + fm_l.descent() + self._pad
+        h = self._y0 + self._line_h * 8 + fm_l.descent() + self._pad
         self.setFixedSize(w, h)
         # Click-through at the Qt level: the whole window ignores mouse input, so
         # it can never capture a click or interfere with the dog's mask-based
@@ -182,9 +183,12 @@ class DebugHUD(QWidget):
         else:
             gesture_val = "-"
 
+        kit = getattr(dog, "art_kit", "?")
+        scale = getattr(dog, "art_scale", 1.0)
         self._lines = [
             ("STATE", dog.state.name),
             ("ANIM", dog.current_anim()),
+            ("ART", f"{kit} x{scale:g}"),
             ("FIDGET", fidget_val),
             ("GESTURE", gesture_val),
             ("PHASE", hud_phase(dog)),
@@ -208,7 +212,8 @@ class DebugHUD(QWidget):
 
         x = dog_x - w // 2
         x = max(2, min(scr_w - w - 2, x))
-        y = max(2, tb_top - self._GAP_ABOVE_DOG - h)
+        gap = int(self._GAP_ABOVE_DOG * max(1.0, getattr(dog, "art_scale", 1.0)))
+        y = max(2, tb_top - gap - h)
         self.move(x, y)
 
     # ── paint ────────────────────────────────────────────────────────────────

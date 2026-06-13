@@ -1,5 +1,42 @@
 # Biscuit — Handoff Document
 
+> ## ⚠️ Phase 1–6 addendum — read this first (added 2026-06-12)
+>
+> The body of this file describes the **Phase 0 POC** and is kept for history. It is
+> now out of date in several ways: there are **18 states, not 12**; the code is **no
+> longer one file**; settings **are** persisted; and the dog now renders from **real
+> pixel-art sprites**, not only QPainter geometry.
+>
+> **Current source of truth, in order:**
+> - `docs/persi-roadmap.md` — the full plan and phase status (Phase 6 code = done).
+> - `docs/PHASE-1-REPORT.md` … `PHASE-6-REPORT.md` — what each phase built and why.
+> - `OUTPUTS/persi-art/NEXT-STEPS.md` — the live work queue.
+> - `OUTPUTS/persi-art/OPEN-ITEMS.md` — which art is final vs placeholder (the ship gate).
+> - `docs/ANIMATION-INVENTORY.md` — the frozen animation list.
+>
+> **Modules now (all imported by `biscuit.py`):**
+> `fidgets.py` (idle micro-behavior engine), `gestures.py` (roll-over circle recognizer),
+> `settings.py` (persisted `%APPDATA%\Persi\settings.json`), `sprites.py` (manifest-driven
+> sprite renderer + kit discovery), `debug_hud.py` (dev HUD). Art pipeline:
+> `tools/art/pack.py` **generates** `assets/manifest.json` from its timing table — never
+> hand-edit the manifest; `tools/art/artlib.py` + `batch0.py` build the frames.
+>
+> **Changed invariants since the POC:**
+> - `WIN_H = 190` now (was 95), still with `DOG_BASE = WIN_H`. The window grew to fit the
+>   dog at the 200% size toggle; everything is bottom-anchored so the extra height is
+>   invisible masked area. `wy = tb_top - WIN_H + 1` still holds.
+> - The renderer is selected by `art.kit` ("procedural" = the geometry below, "pixel" =
+>   sprites, plus drop-in `assets/kits/<name>/`). `art.scale` (0.75–2.0) scales the dog
+>   and props via a feet-anchored QPainter transform; the mask, hit-tests and corner
+>   layout all scale with it.
+> - Verify with **`python tools/verify_phase6.py`** (must pass) and
+>   **`python tools/smoke_phase6.py`** (renders real states + asserts integration logic).
+>
+> The Phase-0 detail below is still correct about the window/click-through/topmost
+> plumbing, which is unchanged.
+
+---
+
 **For:** a new Claude instance (or any developer) picking up this project  
 **Context:** this was built entirely in one session. Arthur is new to Python/GitHub. Everything is in one file. The codebase is clean and intentionally simple.
 

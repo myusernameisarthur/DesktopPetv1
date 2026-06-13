@@ -8,7 +8,10 @@ art each becomes a short overlay/replacement clip on the matching base.
 
 Exceptions deliberately NOT frozen here: the two deferred hook behaviors (type-along's
 `typewrite` + typewriter prop, window-bark reuses `bark`) are specified in
-PHASE-4-HOOKS-DESIGN.md and add ONE new animation + one prop when built.
+PHASE-4-HOOKS-DESIGN.md and add ONE new animation + one prop when built. Also
+`climb-up` (startup ledge-climb, ~10 frames one-shot), an owner-approved post-freeze
+addition from the Phase 6 integration session — spec in OUTPUTS/persi-art/OPEN-ITEMS.md;
+renders as a procedural placeholder until the clip exists.
 
 ## Base poses & idle loops
 

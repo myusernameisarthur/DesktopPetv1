@@ -1,9 +1,10 @@
 """Sprite renderer for Persi (Phase 6).
 
-Loads assets/manifest.json + per-frame PNGs produced by tools/art/, and draws
+Loads a kit's manifest.json + per-frame PNGs produced by tools/art/, and draws
 the right frame for the current state/fidget. Designed to coexist with the
 procedural renderer: every lookup degrades to None so biscuit.py can fall back
-per-state while art is iterated. Toggle via settings key "art.sprites".
+per-state while art is iterated. The active kit is chosen via settings key
+"art.kit" ("procedural" = no sprites; see available_kits()).
 
 Anchoring: frames are 128x128 with the feet baseline at y=116. The window's
 dog baseline is `base` (DOG_BASE - bounce), so frames are blitted at
@@ -20,6 +21,27 @@ ASSETS_DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
 
 # Fidget engine names that differ from clip names
 FIDGET_CLIP = {"scratch": "scratch-lite"}
+
+
+def available_kits():
+    """Sprite kits on disk, as {kit_name: assets_dir}.
+
+    The Phase 6 pixel-art kit lives at assets/ root under the name "pixel".
+    Additional kits are drop-in directories assets/kits/<name>/ holding their
+    own manifest.json + frames + props, packed by their own tools/art run.
+    The procedural renderer is not a kit — biscuit.py offers it as the
+    "procedural" choice that simply loads no SpriteSet.
+    """
+    kits = {}
+    if os.path.exists(os.path.join(ASSETS_DIR, "manifest.json")):
+        kits["pixel"] = ASSETS_DIR
+    kits_dir = os.path.join(ASSETS_DIR, "kits")
+    if os.path.isdir(kits_dir):
+        for name in sorted(os.listdir(kits_dir)):
+            d = os.path.join(kits_dir, name)
+            if os.path.exists(os.path.join(d, "manifest.json")):
+                kits[name] = d
+    return kits
 
 
 class _Clip:
@@ -46,17 +68,29 @@ class _Clip:
                 return i
         return 0
 
-    def pixmap(self, tick, facing):
-        i = self.index_at(tick)
+    def index_in_range(self, tick, first, last):
+        """Frame index looping over the sub-range [first, last] only (used by
+        sniff-walk: stride frames while walking, the 2 sniff frames on pause)."""
+        span = self.starts[last] + self.ticks[last] - self.starts[first]
+        t = self.starts[first] + tick % span
+        for i in range(last, first - 1, -1):
+            if t >= self.starts[i]:
+                return i
+        return first
+
+    def at(self, i, facing):
         if facing == self.facing:
             return self.frames[i]
         if self.mirrored[i] is None:
             self.mirrored[i] = self.frames[i].transformed(QTransform().scale(-1, 1))
         return self.mirrored[i]
 
+    def pixmap(self, tick, facing):
+        return self.at(self.index_at(tick), facing)
+
 
 class SpriteSet:
-    """All clips + props from the manifest. Raises on missing manifest;
+    """All clips + props from one kit's manifest. Raises on missing manifest;
     individual missing clips just return None from get()."""
 
     def __init__(self, assets_dir=ASSETS_DIR):
@@ -91,6 +125,13 @@ class SpriteSet:
         c = self.clips.get(name)
         return c.pixmap(tick, facing) if c else None
 
+    def get_range(self, name, tick, facing, first, last):
+        """QPixmap looping over frames [first, last] of clip `name`, or None."""
+        c = self.clips.get(name)
+        if not c or not (0 <= first <= last < len(c.frames)):
+            return None
+        return c.at(c.index_in_range(tick, first, last), facing)
+
     def fidget_pixmap(self, fidget_name, progress, facing):
         """Frame for an active fidget, indexed by engine progress (0..1) so
         clip length and engine duration never drift apart."""
@@ -98,11 +139,7 @@ class SpriteSet:
         if not c:
             return None
         i = min(len(c.frames) - 1, int(progress * len(c.frames)))
-        if facing == c.facing:
-            return c.frames[i]
-        if c.mirrored[i] is None:
-            c.mirrored[i] = c.frames[i].transformed(QTransform().scale(-1, 1))
-        return c.mirrored[i]
+        return c.at(i, facing)
 
     def draw_dog(self, p, pixmap, cx, base):
         p.drawPixmap(cx - self.frame_size // 2, base - self.baseline, pixmap)
